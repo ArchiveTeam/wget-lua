@@ -40,6 +40,7 @@ as that of the covered work.  */
 
 #include "url.h"
 #include "recur.h"
+#include "luahooks.h"
 #include "utils.h"
 #include "retr.h"
 #include "ftp.h"
@@ -50,6 +51,7 @@ as that of the covered work.  */
 #include "html-url.h"
 #include "css-url.h"
 #include "spider.h"
+#include "luahooks.h"
 
 /* Functions for maintaining the URL queue.  */
 
@@ -416,6 +418,32 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
               url_free (url_parsed);
               free_urlpos (children);
             }
+
+          struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
+          struct luahooks_url *lh_url = luahooks_urls;
+          while (lh_url != NULL)
+            {
+              if (! string_set_contains (blacklist, lh_url->url))
+                {
+                  DEBUGP (("Add url from Lua-script: %s\n", lh_url->url));
+                  struct iri *ci;
+                  char *referer_url = url;
+                  ci = iri_new ();
+                  set_uri_encoding (ci, i->content_encoding, false);
+                  url_enqueue (queue, ci, xstrdup (lh_url->url),
+                               xstrdup (referer_url), depth + 1,
+                               lh_url->link_expect_html,
+                               lh_url->link_expect_css);
+                  /* We blacklist the URL we have enqueued, because we
+                     don't want to enqueue (and hence download) the
+                     same URL twice.  */
+                  string_set_add (blacklist, lh_url->url);
+                }
+              
+              struct luahooks_url *next_lh_url = lh_url->next;
+              free (lh_url);
+              lh_url = next_lh_url;
+            }
         }
 
       if (file
@@ -491,6 +519,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
   struct url *u = upos->url;
   const char *url = u->url;
   bool u_scheme_like_http;
+  bool verdict = false;
 
   DEBUGP (("Deciding whether to enqueue \"%s\".\n", url));
 
@@ -671,14 +700,18 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
 
   /* The URL has passed all the tests.  It can be placed in the
      download queue. */
-  DEBUGP (("Decided to load it.\n"));
-
-  return true;
+  verdict = true;
 
  out:
-  DEBUGP (("Decided NOT to load it.\n"));
+  verdict = luahooks_download_child_p (upos, parent, depth, start_url_parsed,
+                                       iri, verdict);
 
-  return false;
+  if (verdict)
+    DEBUGP (("Decided to load it.\n"));
+  else
+    DEBUGP (("Decided NOT to load it.\n"));
+
+  return verdict;
 }
 
 /* This function determines whether we will consider downloading the

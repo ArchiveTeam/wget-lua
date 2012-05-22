@@ -58,6 +58,7 @@ as that of the covered work.  */
 #include "md5.h"
 #include "convert.h"
 #include "spider.h"
+#include "luahooks.h"
 #include "warc.h"
 
 #ifdef TESTING
@@ -71,7 +72,6 @@ as that of the covered work.  */
 extern char *version_string;
 
 /* Forward decls. */
-struct http_stat;
 static char *create_authorization_line (const char *, const char *,
                                         const char *, const char *,
                                         const char *, bool *);
@@ -1432,34 +1432,6 @@ persistent_available_p (const char *host, int port, bool ssl,
   fd = -1;                                      \
 } while (0)
 
-struct http_stat
-{
-  wgint len;                    /* received length */
-  wgint contlen;                /* expected length */
-  wgint restval;                /* the restart value */
-  int res;                      /* the result of last read */
-  char *rderrmsg;               /* error message from read error */
-  char *newloc;                 /* new location (redirection) */
-  char *remote_time;            /* remote time-stamp string */
-  char *error;                  /* textual HTTP error */
-  int statcode;                 /* status code */
-  char *message;                /* status message */
-  wgint rd_size;                /* amount of data read from socket */
-  double dltime;                /* time it took to download the data */
-  const char *referer;          /* value of the referer header. */
-  char *local_file;             /* local file name. */
-  bool existence_checked;       /* true if we already checked for a file's
-                                   existence after having begun to download
-                                   (needed in gethttp for when connection is
-                                   interrupted/restarted. */
-  bool timestamp_checked;       /* true if pre-download time-stamping checks
-                                 * have already been performed */
-  char *orig_file_name;         /* name of file to compare for time-stamping
-                                 * (might be != local_file if -K is set) */
-  wgint orig_file_size;         /* size of file to compare for time-stamping */
-  time_t orig_file_tstamp;      /* time-stamp of file to compare for
-                                 * time-stamping */
-};
 
 static void
 free_hstat (struct http_stat *hs)
@@ -3094,6 +3066,19 @@ Spider mode enabled. Check if remote file exists.\n"));
       /* Get the new location (with or without the redirection).  */
       if (hstat.newloc)
         *newloc = xstrdup (hstat.newloc);
+
+      luahook_action_t action = luahooks_httploop_result (u, err, &hstat);
+      switch (action)
+        {
+          case LUAHOOK_NOTHING:
+            break;
+          case LUAHOOK_CONTINUE:
+            continue;
+          case LUAHOOK_EXIT:
+            goto exit;
+          case LUAHOOK_ABORT:
+            abort();
+        }
 
       switch (err)
         {

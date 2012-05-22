@@ -207,6 +207,9 @@ static const struct {
   { "localencoding",    &opt.locale,            cmd_string },
   { "logfile",          &opt.lfilename,         cmd_file },
   { "login",            &opt.ftp_user,          cmd_string },/* deprecated*/
+#ifdef ENABLE_LUA
+  { "luafilename",      &opt.lua_filename,      cmd_file },
+#endif
   { "maxredirect",      &opt.max_redirect,      cmd_number },
   { "mirror",           NULL,                   cmd_spec_mirror },
   { "netrc",            &opt.netrc,             cmd_boolean },

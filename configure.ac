@@ -544,6 +544,17 @@ AC_CHECK_HEADER(pcre.h,
                   ])
 )
 
+dnl
+dnl Check for Lua
+dnl
+
+AC_CHECK_HEADER(lua5.1/lua.h,
+                AC_CHECK_LIB(lua5.1, lua_newstate,
+                  [LIBS="${LIBS} -llua5.1"
+                   AC_DEFINE([ENABLE_LUA], 1,
+                             [Define if Lua is available.])
+                  ])
+)
  
 dnl Needed by src/Makefile.am
 AM_CONDITIONAL([IRI_IS_ENABLED], [test "X$iri" != "Xno"])

@@ -55,6 +55,7 @@ as that of the covered work.  */
 #include "spider.h"
 #include "http.h"               /* for save_cookies */
 #include "ptimer.h"
+#include "luahooks.h"
 #include "warc.h"
 #include "closeout.h"
 #include <getopt.h>
@@ -232,6 +233,7 @@ static struct cmdline_option option_data[] =
     { "limit-rate", 0, OPT_VALUE, "limitrate", -1 },
     { "load-cookies", 0, OPT_VALUE, "loadcookies", -1 },
     { "local-encoding", 0, OPT_VALUE, "localencoding", -1 },
+    { "lua-script", 0, OPT_VALUE, "luafilename", -1 },
     { "max-redirect", 0, OPT_VALUE, "maxredirect", -1 },
     { "mirror", 'm', OPT_BOOLEAN, "mirror", -1 },
     { "no", 'n', OPT__NO, NULL, required_argument },
@@ -1433,6 +1435,8 @@ for details.\n\n"));
   /* Open WARC file. */
   if (opt.warc_filename != 0)
     warc_init ();
+
+  luahooks_init ();
 
   DEBUGP (("DEBUG output created by Wget %s on %s.\n\n",
            version_string, OS_TYPE));
