@@ -430,8 +430,9 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                   char *referer_url = url;
                   ci = iri_new ();
                   set_uri_encoding (ci, i->content_encoding, false);
+                  /* We do not increment depth, so page_requisites still works. */
                   url_enqueue (queue, ci, xstrdup (lh_url->url),
-                               xstrdup (referer_url), depth + 1,
+                               xstrdup (referer_url), depth,
                                lh_url->link_expect_html,
                                lh_url->link_expect_css);
                   /* We blacklist the URL we have enqueued, because we
