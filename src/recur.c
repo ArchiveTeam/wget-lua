@@ -64,6 +64,7 @@ struct queue_element {
   struct iri *iri;                /* sXXXav */
   bool css_allowed;             /* whether the document is allowed to
                                    be treated as CSS. */
+  const char *post_data;        /* POST query string */
   struct queue_element *next;   /* next element in queue */
 };
 
@@ -97,7 +98,8 @@ url_queue_delete (struct url_queue *queue)
 static void
 url_enqueue (struct url_queue *queue, struct iri *i,
              const char *url, const char *referer, int depth,
-             bool html_allowed, bool css_allowed)
+             bool html_allowed, bool css_allowed,
+             const char *post_data)
 {
   struct queue_element *qel = xnew (struct queue_element);
   qel->iri = i;
@@ -106,6 +108,7 @@ url_enqueue (struct url_queue *queue, struct iri *i,
   qel->depth = depth;
   qel->html_allowed = html_allowed;
   qel->css_allowed = css_allowed;
+  qel->post_data = post_data;
   qel->next = NULL;
 
   ++queue->count;
@@ -134,7 +137,7 @@ url_enqueue (struct url_queue *queue, struct iri *i,
 static bool
 url_dequeue (struct url_queue *queue, struct iri **i,
              const char **url, const char **referer, int *depth,
-             bool *html_allowed, bool *css_allowed)
+             bool *html_allowed, bool *css_allowed, const char **post_data)
 {
   struct queue_element *qel = queue->head;
 
@@ -151,6 +154,7 @@ url_dequeue (struct url_queue *queue, struct iri **i,
   *depth = qel->depth;
   *html_allowed = qel->html_allowed;
   *css_allowed = qel->css_allowed;
+  *post_data = qel->post_data;
 
   --queue->count;
 
@@ -221,7 +225,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
   /* Enqueue the starting URL.  Use start_url_parsed->url rather than
      just URL so we enqueue the canonical form of the URL.  */
   url_enqueue (queue, i, xstrdup (start_url_parsed->url), NULL, 0, true,
-               false);
+               false, NULL);
   string_set_add (blacklist, start_url_parsed->url);
 
   while (1)
@@ -230,8 +234,13 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       char *url, *referer, *file = NULL;
       int depth;
       bool html_allowed, css_allowed;
+      char *post_data = NULL;
       bool is_css = false;
       bool dash_p_leaf_HTML = false;
+
+      bool post_data_suspended = false;
+      char *saved_post_data = NULL;
+      char *saved_post_file_name = NULL;
 
       if (opt.quota && total_downloaded_bytes > opt.quota)
         break;
@@ -242,7 +251,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
 
       if (!url_dequeue (queue, (struct iri **) &i,
                         (const char **)&url, (const char **)&referer,
-                        &depth, &html_allowed, &css_allowed))
+                        &depth, &html_allowed, &css_allowed,
+                        (const char **)&post_data))
         break;
 
       /* ...and download it.  Note that this download is in most cases
@@ -253,7 +263,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
          and again under URL2, but at a different (possibly smaller)
          depth, we want the URL's children to be taken into account
          the second time.  */
-      if (dl_url_file_map && hash_table_contains (dl_url_file_map, url))
+      if (dl_url_file_map && hash_table_contains (dl_url_file_map, url)
+          && post_data == NULL)
         {
           file = xstrdup (hash_table_get (dl_url_file_map, url));
 
@@ -282,8 +293,16 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
           char *redirected = NULL;
           struct url *url_parsed = url_parse (url, &url_err, i, true);
 
+          if (post_data)
+            {
+              SUSPEND_POST_DATA;
+              opt.post_data = post_data;
+            }
+
           status = retrieve_url (url_parsed, url, &file, &redirected, referer,
                                  &dt, false, i, true);
+
+          RESTORE_POST_DATA;
 
           if (html_allowed && file && status == RETROK
               && (dt & RETROKF) && (dt & TEXTHTML))
@@ -405,7 +424,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                       url_enqueue (queue, ci, xstrdup (child->url->url),
                                    xstrdup (referer_url), depth + 1,
                                    child->link_expect_html,
-                                   child->link_expect_css);
+                                   child->link_expect_css,
+                                   NULL);
                       /* We blacklist the URL we have enqueued, because we
                          don't want to enqueue (and hence download) the
                          same URL twice.  */
@@ -424,7 +444,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       struct luahooks_url *lh_url = luahooks_urls;
       while (lh_url != NULL)
         {
-          if (! string_set_contains (blacklist, lh_url->url))
+          if (lh_url->post_data || ! string_set_contains (blacklist, lh_url->url))
             {
               DEBUGP (("Add url from Lua-script: %s\n", lh_url->url));
               struct iri *ci;
@@ -435,7 +455,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
               url_enqueue (queue, ci, xstrdup (lh_url->url),
                            xstrdup (referer_url), depth,
                            lh_url->link_expect_html,
-                           lh_url->link_expect_css);
+                           lh_url->link_expect_css,
+                           lh_url->post_data);
               /* We blacklist the URL we have enqueued, because we
                  don't want to enqueue (and hence download) the
                  same URL twice.  */
@@ -474,22 +495,25 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       xfree (url);
       xfree_null (referer);
       xfree_null (file);
+      xfree_null (post_data);
       iri_free (i);
     }
 
   /* If anything is left of the queue due to a premature exit, free it
      now.  */
   {
-    char *d1, *d2;
+    char *d1, *d2, *d7;
     int d3;
     bool d4, d5;
     struct iri *d6;
     while (url_dequeue (queue, (struct iri **)&d6,
-                        (const char **)&d1, (const char **)&d2, &d3, &d4, &d5))
+                        (const char **)&d1, (const char **)&d2, &d3, &d4,
+                        &d5, (const char **)&d7))
       {
         iri_free (d6);
         xfree (d1);
         xfree_null (d2);
+        xfree_null (d7);
       }
   }
   url_queue_delete (queue);

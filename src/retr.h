@@ -75,4 +75,21 @@ void set_local_file (const char **, const char *);
 
 bool input_file_url (const char *);
 
+#define SUSPEND_POST_DATA do {                  \
+  post_data_suspended = true;                   \
+  saved_post_data = opt.post_data;              \
+  saved_post_file_name = opt.post_file_name;    \
+  opt.post_data = NULL;                         \
+  opt.post_file_name = NULL;                    \
+} while (0)
+
+#define RESTORE_POST_DATA do {                          \
+  if (post_data_suspended)                              \
+    {                                                   \
+      opt.post_data = saved_post_data;                  \
+      opt.post_file_name = saved_post_file_name;        \
+      post_data_suspended = false;                      \
+    }                                                   \
+} while (0)
+
 #endif /* RETR_H */
