@@ -472,26 +472,34 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
           lua_pushnil (lua);
           while (lua_next (lua, -2) != 0)
             {
-              cur = malloc (sizeof (struct luahooks_url));
               /* Value should be a table. */
 
+              const char *ret;
+
               lua_getfield (lua, -1, "url");
-              cur->url = strdup (lua_tostring (lua, -1));
-              lua_pop (lua, 1);
+              ret = lua_tostring (lua, -1);
 
-              lua_getfield (lua, -1, "link_expect_html");
-              cur->link_expect_html = lua_tointeger (lua, -1) == 1 ? 1 : 0;
-              lua_pop (lua, 1);
+              if (ret)
+                {
+                  cur = malloc (sizeof (struct luahooks_url));
 
-              lua_getfield (lua, -1, "link_expect_css");
-              cur->link_expect_css = lua_tointeger (lua, -1) == 1 ? 1 : 0;
-              lua_pop (lua, 1);
+                  cur->url = strdup (ret);
+                  lua_pop (lua, 1);
+
+                  lua_getfield (lua, -1, "link_expect_html");
+                  cur->link_expect_html = lua_tointeger (lua, -1) == 1 ? 1 : 0;
+                  lua_pop (lua, 1);
+
+                  lua_getfield (lua, -1, "link_expect_css");
+                  cur->link_expect_css = lua_tointeger (lua, -1) == 1 ? 1 : 0;
+                  lua_pop (lua, 1);
+
+                  cur->next = head;
+                  head = cur;
+                }
 
               /* Remove value, keep key for next iteration. */
               lua_pop (lua, 1);
-
-              cur->next = head;
-              head = cur;
             }
         }
       /* Remove table. */
