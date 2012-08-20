@@ -383,7 +383,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       /* If the downloaded document was HTML or CSS, parse it and enqueue the
          links it contains. */
 
-      if (descend)
+      if (descend && (opt.recursive || opt.page_requisites))
         {
           bool meta_disallow_follow = false;
           struct urlpos *children
