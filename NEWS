@@ -6,7 +6,7 @@ See the end for copying conditions.
 
 Please send GNU Wget bug reports to <bug-wget@gnu.org>.
 
-* Changes in Wget X.Y.Z
+* Changes in Wget 1.14
 
 ** Add support for content-on-error.  It allows to store the HTTP
    payload on 4xx or 5xx errors.
@@ -21,7 +21,7 @@ Please send GNU Wget bug reports to <bug-wget@gnu.org>.
 
 ** Report stdout close errors.
 
-** Accept the --bit option.
+** Accept the --report-speed option.
 
 ** Enable client certificates when GNU TLS is used.
 
@@ -30,6 +30,8 @@ Please send GNU Wget bug reports to <bug-wget@gnu.org>.
 ** Accept the arguments --accept-reject and --reject-regex.
 
 ** The GNU TLS backend honors correctly the timeout value.
+
+** Add support for RFC 2617 Digest Access Authentication.
 
 * Changes in Wget 1.13.4
 

@@ -1,3 +1,90 @@
+2012-07-03  Steven Schubiger  <stsc@member.fsf.org>
+
+	* init.c: Include warc.h for warc_close in cleanup function.
+
+2012-07-08  Steven Schubiger  <stsc@member.fsf.org>
+
+	* exits.h: Fix comment.
+	* exits.c: Likewise.
+
+2012-07-07  Tim Ruehsen <tim.ruehsen@gmx.de>
+
+	(digest_authentication_encode): Add support for RFC 2617 Digest
+	Access Authentication.
+
+2012-07-07  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* http.c (http_loop): Fix log message.
+	* main.c (main): Likewise.
+	Reported by: Petr Pisar <petr.pisar@atlas.cz>
+
+2012-06-17  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* wget.h: Define `CLOSEFAILED'.
+	* init.c: Include "exits.h".
+	(cleanup): Check `fclose' failure.
+	* exits.c (get_status_for_err): Handle `CLOSEFAILED'.
+
+2012-06-16  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* main.c (main): Move some cleanup related function to...
+	* init.c (cleanup): ...here.
+
+	* main.c: Do not include "stdout.h".
+	(main): Do not register `close_stdout' at exit.
+	Reported by: Micah Cowan  <micah@cowan.name>.
+
+2012-06-09  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* main.c (print_help): Move --report-speed under the section
+	"Logging and input file".
+
+2012-06-06  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* main.c (print_help): Rename --bits to --report-bps.
+	(cmdline_options): Likewise.
+	* init.c (commands): Rename --report-bps to --report-speed.
+	(cmd_spec_report_speed): New function.
+
+	* options.h (struct options): Rename `bits_fmt' to `report_bps'.
+	* main.c (print_help): Rename --bits to --report-bps.
+	(cmdline_options): Likewise.
+	* init.c (commands): Likewise
+
+	* progress.c (create_image): Adjust caller.
+	* retr.c (retr_rate): Likewise.
+	* utils.c (convert_to_bits): Likewise.
+
+2012-06-04  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* main.c (main): Check for filename != NULL.
+	* warc.c (warc_process_cdx_line): Fix memory leak.
+	* utils.c (match_posix_regex, compile_posix_regex): Remove dead
+   assignment.
+	* openssl.c (ssl_init): Fix old-style function definition.
+
+2012-06-02  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* connect.c: Include <sys/socket.h> and <sys/select.h>.
+
+2012-05-30  Gijs van Tulder  <gvtulder@gmail.com>
+
+	* warc.c: Fix segfault if CDX record is not found.
+
+2011-05-26  Steven Schweda  <sms@antinode.info>
+	* connect.c [HAVE_SYS_SOCKET_H]: Include <sys/socket.h>.
+	[HAVE_SYS_SELECT_H]: Include <sys/select.h>.
+
+2012-05-26  Mike Frysinger <vapier@gentoo.org>
+
+	* warc.c: Change type of `warc_current_gzfile' to gzFile.
+
+2012-05-26  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* warc.c (warc_load_cdx_dedup_file): Change type of `line_length' to
+	ssize_t.
+	Suggested by: Ángel González <keisial@gmail.com>
+
 2012-05-18  Tim Ruehsen  <tim.ruehsen@gmx.de>
 
 	* gnutls.c (wgnutls_poll): Honor the specified `timeout' value.

@@ -75,7 +75,7 @@ static FILE *warc_current_file;
 #ifdef HAVE_LIBZ
 /* The gzip stream for the current WARC file
    (or NULL, if WARC or gzip is disabled). */
-static gzFile *warc_current_gzfile;
+static gzFile warc_current_gzfile;
 
 /* The offset of the current gzip record in the WARC file. */
 static off_t warc_current_gzfile_offset;
@@ -913,6 +913,12 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
           free (record_id);
         }
     }
+  else
+    {
+      xfree_null(checksum);
+      xfree_null(original_url);
+      xfree_null(record_id);
+    }
 }
 
 /* Loads the CDX file from opt.warc_cdx_dedup_filename and fills
@@ -930,7 +936,7 @@ warc_load_cdx_dedup_file (void)
 
   char *lineptr = NULL;
   size_t n = 0;
-  size_t line_length;
+  ssize_t line_length;
 
   /* The first line should contain the CDX header.
      Format:  " CDX x x x x x"
@@ -1001,10 +1007,10 @@ warc_find_duplicate_cdx_record (char *url, char *sha1_digest_payload)
 
   char *key;
   struct warc_cdx_record *rec_existing;
-  hash_table_get_pair (warc_cdx_dedup_table, sha1_digest_payload, &key,
-                       &rec_existing);
+  int found = hash_table_get_pair (warc_cdx_dedup_table, sha1_digest_payload,
+                                   &key, &rec_existing);
 
-  if (rec_existing != NULL && strcmp (rec_existing->url, url) == 0)
+  if (found && strcmp (rec_existing->url, url) == 0)
     return rec_existing;
   else
     return NULL;

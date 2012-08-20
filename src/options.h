@@ -279,11 +279,12 @@ struct options
 
   bool show_all_dns_entries; /* Show all the DNS entries when resolving a
                                 name. */
-  bool bits_fmt;              /*Output bandwidth in bits format*/
 
 #ifdef ENABLE_LUA
   char *lua_filename;		/* Lua script filename */
 #endif
+
+  bool report_bps;              /*Output bandwidth in bits format*/
 };
 
 extern struct options opt;

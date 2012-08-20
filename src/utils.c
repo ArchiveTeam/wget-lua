@@ -1844,12 +1844,12 @@ number_to_static_string (wgint number)
   return buf;
 }
 
-/* Converts the byte to bits format if --bits option is enabled
+/* Converts the byte to bits format if --report-bps option is enabled
  */
 wgint
 convert_to_bits (wgint num)
 {
-  if (opt.bits_fmt)
+  if (opt.report_bps)
     return num * 8;
   return num;
 }
@@ -2355,7 +2355,7 @@ compile_posix_regex (const char *str)
     {
       int errbuf_size = regerror (errcode, (regex_t *) regex, NULL, 0);
       char *errbuf = xmalloc (errbuf_size);
-      errbuf_size = regerror (errcode, (regex_t *) regex, errbuf, errbuf_size);
+      regerror (errcode, (regex_t *) regex, errbuf, errbuf_size);
       fprintf (stderr, _("Invalid regular expression %s, %s\n"),
                quote (str), errbuf);
       xfree (errbuf);
@@ -2402,7 +2402,7 @@ match_posix_regex (const void *regex, const char *str)
     {
       int errbuf_size = regerror (rc, opt.acceptregex, NULL, 0);
       char *errbuf = xmalloc (errbuf_size);
-      errbuf_size = regerror (rc, opt.acceptregex, errbuf, errbuf_size);
+      regerror (rc, opt.acceptregex, errbuf, errbuf_size);
       logprintf (LOG_VERBOSE, _("Error while matching %s: %d\n"),
                  quote (str), rc);
       xfree (errbuf);

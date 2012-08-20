@@ -30,6 +30,7 @@ shall include the source code for the parts of OpenSSL used as well
 as that of the covered work.  */
 
 #include "wget.h"
+#include "exits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +67,7 @@ as that of the covered work.  */
 #include "res.h"                /* for res_cleanup */
 #include "http.h"               /* for http_cleanup */
 #include "retr.h"               /* for output_stream */
+#include "warc.h"               /* for warc_close */
 
 #ifdef TESTING
 #include "test.h"
@@ -100,6 +102,7 @@ CMD_DECLARE (cmd_spec_progress);
 CMD_DECLARE (cmd_spec_recursive);
 CMD_DECLARE (cmd_spec_regex_type);
 CMD_DECLARE (cmd_spec_restrict_file_names);
+CMD_DECLARE (cmd_spec_report_speed);
 #ifdef HAVE_SSL
 CMD_DECLARE (cmd_spec_secure_protocol);
 #endif
@@ -133,7 +136,6 @@ static const struct {
   { "backups",          &opt.backups,           cmd_number },
   { "base",             &opt.base_href,         cmd_string },
   { "bindaddress",      &opt.bind_address,      cmd_string },
-  { "bits",             &opt.bits_fmt,          cmd_boolean},
 #ifdef HAVE_SSL
   { "cacertificate",    &opt.ca_cert,           cmd_file },
 #endif
@@ -251,6 +253,7 @@ static const struct {
   { "relativeonly",     &opt.relative_only,     cmd_boolean },
   { "remoteencoding",   &opt.encoding_remote,   cmd_string },
   { "removelisting",    &opt.remove_listing,    cmd_boolean },
+  { "reportspeed",             &opt.report_bps, cmd_spec_report_speed},
   { "restrictfilenames", NULL,                  cmd_spec_restrict_file_names },
   { "retrsymlinks",     &opt.retr_symlinks,     cmd_boolean },
   { "retryconnrefused", &opt.retry_connrefused, cmd_boolean },
@@ -1454,6 +1457,15 @@ cmd_spec_restrict_file_names (const char *com, const char *val, void *place_igno
   return true;
 }
 
+static bool
+cmd_spec_report_speed (const char *com, const char *val, void *place_ignored)
+{
+  opt.report_bps = strcasecmp (val, "bits") == 0;
+  if (!opt.report_bps)
+    fprintf (stderr, _("%s: %s: Invalid value %s.\n"), exec_name, com, quote (val));
+  return opt.report_bps;
+}
+
 #ifdef HAVE_SSL
 static bool
 cmd_spec_secure_protocol (const char *com, const char *val, void *place)
@@ -1668,8 +1680,16 @@ cleanup (void)
 {
   /* Free external resources, close files, etc. */
 
+  /* Close WARC file. */
+  if (opt.warc_filename != 0)
+    warc_close ();
+
+  log_close ();
+
   if (output_stream)
-    fclose (output_stream);
+    if (fclose (output_stream) == EOF)
+      inform_exit_status (CLOSEFAILED);
+
   /* No need to check for error because Wget flushes its output (and
      checks for errors) after any data arrives.  */
 
@@ -1688,6 +1708,9 @@ cleanup (void)
   cleanup_html_url ();
   host_cleanup ();
   log_cleanup ();
+
+  for (i = 0; i < nurl; i++)
+    xfree (url[i]);
 
   {
     extern acc_t *netrc_list;
