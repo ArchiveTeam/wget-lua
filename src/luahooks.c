@@ -498,9 +498,9 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
                   ret = lua_tostring (lua, -1);
                   lua_pop (lua, 1);
                   if (ret)
-                    {
-                      cur->post_data = strdup (ret);
-                    }
+                    cur->post_data = strdup (ret);
+                  else
+                    cur->post_data = NULL;
 
                   cur->next = head;
                   head = cur;

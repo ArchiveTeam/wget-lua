@@ -302,6 +302,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
           status = retrieve_url (url_parsed, url, &file, &redirected, referer,
                                  &dt, false, i, true);
 
+          opt.post_data = NULL;
           RESTORE_POST_DATA;
 
           if (html_allowed && file && status == RETROK
