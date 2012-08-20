@@ -418,33 +418,33 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
               url_free (url_parsed);
               free_urlpos (children);
             }
+        }
 
-          struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
-          struct luahooks_url *lh_url = luahooks_urls;
-          while (lh_url != NULL)
+      struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
+      struct luahooks_url *lh_url = luahooks_urls;
+      while (lh_url != NULL)
+        {
+          if (! string_set_contains (blacklist, lh_url->url))
             {
-              if (! string_set_contains (blacklist, lh_url->url))
-                {
-                  DEBUGP (("Add url from Lua-script: %s\n", lh_url->url));
-                  struct iri *ci;
-                  char *referer_url = url;
-                  ci = iri_new ();
-                  set_uri_encoding (ci, i->content_encoding, false);
-                  /* We do not increment depth, so page_requisites still works. */
-                  url_enqueue (queue, ci, xstrdup (lh_url->url),
-                               xstrdup (referer_url), depth,
-                               lh_url->link_expect_html,
-                               lh_url->link_expect_css);
-                  /* We blacklist the URL we have enqueued, because we
-                     don't want to enqueue (and hence download) the
-                     same URL twice.  */
-                  string_set_add (blacklist, lh_url->url);
-                }
-              
-              struct luahooks_url *next_lh_url = lh_url->next;
-              free (lh_url);
-              lh_url = next_lh_url;
+              DEBUGP (("Add url from Lua-script: %s\n", lh_url->url));
+              struct iri *ci;
+              char *referer_url = url;
+              ci = iri_new ();
+              set_uri_encoding (ci, i->content_encoding, false);
+              /* We do not increment depth, so page_requisites still works. */
+              url_enqueue (queue, ci, xstrdup (lh_url->url),
+                           xstrdup (referer_url), depth,
+                           lh_url->link_expect_html,
+                           lh_url->link_expect_css);
+              /* We blacklist the URL we have enqueued, because we
+                 don't want to enqueue (and hence download) the
+                 same URL twice.  */
+              string_set_add (blacklist, lh_url->url);
             }
+          
+          struct luahooks_url *next_lh_url = lh_url->next;
+          free (lh_url);
+          lh_url = next_lh_url;
         }
 
       if (file

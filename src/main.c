@@ -1551,7 +1551,7 @@ outputting to a regular file.\n"));
         }
       else
         {
-          if ((opt.recursive || opt.page_requisites)
+          if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
               && (url_scheme (*t) != SCHEME_FTP || url_uses_proxy (url_parsed)))
             {
               int old_follow_ftp = opt.follow_ftp;

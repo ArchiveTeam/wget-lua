@@ -10,9 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <lua5.1/lua.h>
-#include <lua5.1/lauxlib.h>
-#include <lua5.1/lualib.h>
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
 
 #include "luahooks.h"
 
@@ -80,7 +80,7 @@ handle_lua_error (int res)
   if (res != 0)
     {
       char *msg;
-      msg = strdupa (lua_tostring (lua, -1));
+      msg = strdup (lua_tostring (lua, -1));
       lua_pop (lua, 1);
       switch (res)
         {
@@ -102,13 +102,14 @@ handle_lua_error (int res)
           default:
             printf ("Lua error: %s.\n", msg);
         }
+      free (msg);
     }
 }
 
 bool
 luahooks_function_lookup (const char *type, const char *name)
 {
-  lua_getfield (lua, LUA_GLOBALSINDEX, "wget");
+  lua_getglobal (lua, "wget");
   if (! lua_istable (lua, -1))
     {
       lua_pop (lua, 1);
@@ -432,6 +433,15 @@ luahooks_download_child_p (const struct urlpos *upos, struct url *parent, int de
       lua_pop (lua, 1);
       return answer;
     }
+}
+
+bool
+luahooks_can_generate_urls ()
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "get_urls"))
+    return false;
+  lua_pop (lua, 1);
+  return true;
 }
 
 struct luahooks_url *

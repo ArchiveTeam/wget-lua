@@ -53,6 +53,7 @@ as that of the covered work.  */
 #include "ptimer.h"
 #include "html-url.h"
 #include "iri.h"
+#include "luahooks.h"
 
 /* Total size of downloaded files.  Used to enforce quota.  */
 SUM_SIZE_INT total_downloaded_bytes;
@@ -1057,7 +1058,7 @@ retrieve_from_file (const char *file, bool html, int *count)
 
       parsed_url = url_parse (cur_url->url->url, NULL, tmpiri, true);
 
-      if ((opt.recursive || opt.page_requisites)
+      if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
           && (cur_url->url->scheme != SCHEME_FTP || getproxy (cur_url->url)))
         {
           int old_follow_ftp = opt.follow_ftp;

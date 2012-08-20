@@ -27,6 +27,7 @@ bool luahooks_download_child_p (const struct urlpos *upos,
                     struct url *parent, int depth,
                     struct url *start_url_parsed, struct iri *iri,
                     bool verdict);
+bool luahooks_can_generate_urls ();
 struct luahooks_url *luahooks_get_urls (const char *file, const char *url,
                                        bool is_css, struct iri *iri);
 
