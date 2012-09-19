@@ -1,3 +1,30 @@
+2012-09-02  Nguyễn Thái Ngọc Duy  <pclouds@gmail.com> (tiny change)
+
+	* src/main.c (main): mark more strings for translation.
+	* src/mswindows.c (fork_to_background): Likewise.
+	* src/recur.c (download_child_p): Likewise.
+
+2012-08-28  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* gnutls.c (ssl_check_certificate): deinit gnutls_x509_crt_t.
+	* gnutls.c (ssl_init): don't error if CA directory is empty.
+
+2012-07-07  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* html-url.c (cleanup_html_url): Remove "static" modifier.
+	* init.c (cleanup_html_url): Likewise.
+	Reported by: Mike Frysinger <vapier@gentoo.org>.
+
+2012-08-25  Hrvoje Niksic  <hniksic@gmail.com>
+
+	* warc.c (warc_find_duplicate_cdx_record): Use hash_table_get
+	instead of hash_table_get_pair.
+
+2012-08-21  <y-iida@secom.co.jp> (tiny change)
+
+	* connect.c (connect_to_ip) [ENABLE_IPV6]: Attempt to use IPv6.
+	* http.c (gethttp): Likewise.
+
 2012-07-03  Steven Schubiger  <stsc@member.fsf.org>
 
 	* init.c: Include warc.h for warc_close in cleanup function.
