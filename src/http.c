@@ -2976,6 +2976,11 @@ http_loop (struct url *u, struct url *original_url, char **newloc,
   if (!opt.spider)
     send_head_first = false;
 
+  /* Send preliminary HEAD request if --content-disposition and -c are used
+     together.  */
+  if (opt.content_disposition && opt.always_rest)
+    send_head_first = true;
+
   /* Send preliminary HEAD request if -N is given and we have an existing
    * destination file. */
   file_name = url_file_name (opt.trustservernames ? u : original_url, NULL);
@@ -3642,7 +3647,7 @@ digest_authentication_encode (const char *au, const char *user,
                               const char *passwd, const char *method,
                               const char *path)
 {
-  static char *realm, *opaque, *nonce, *qop;
+  static char *realm, *opaque, *nonce, *qop, *algorithm;
   static struct {
     const char *name;
     char **variable;
@@ -3650,15 +3655,17 @@ digest_authentication_encode (const char *au, const char *user,
     { "realm", &realm },
     { "opaque", &opaque },
     { "nonce", &nonce },
-    { "qop", &qop }
+    { "qop", &qop },
+    { "algorithm", &algorithm }
   };
   char cnonce[16] = "";
   char *res;
+  int res_len;
   size_t res_size;
   param_token name, value;
 
 
-  realm = opaque = nonce = qop = NULL;
+  realm = opaque = nonce = qop = algorithm = NULL;
 
   au += 6;                      /* skip over `Digest' */
   while (extract_param (&au, &name, &value, ','))
@@ -3681,12 +3688,19 @@ digest_authentication_encode (const char *au, const char *user,
       user = NULL; /* force freeing mem and return */
     }
 
+  if (algorithm != NULL && strcmp (algorithm,"MD5") && strcmp (algorithm,"MD5-sess"))
+    {
+      logprintf (LOG_NOTQUIET, _("Unsupported algorithm '%s'.\n"), algorithm);
+      user = NULL; /* force freeing mem and return */
+    }
+
   if (!realm || !nonce || !user || !passwd || !path || !method)
     {
       xfree_null (realm);
       xfree_null (opaque);
       xfree_null (nonce);
       xfree_null (qop);
+      xfree_null (algorithm);
       return NULL;
     }
 
@@ -3705,7 +3719,25 @@ digest_authentication_encode (const char *au, const char *user,
     md5_process_bytes ((unsigned char *)":", 1, &ctx);
     md5_process_bytes ((unsigned char *)passwd, strlen (passwd), &ctx);
     md5_finish_ctx (&ctx, hash);
+
     dump_hash (a1buf, hash);
+
+    if (! strcmp (algorithm, "MD5-sess"))
+      {
+        /* A1BUF = H( H(user ":" realm ":" password) ":" nonce ":" cnonce ) */
+        snprintf (cnonce, sizeof (cnonce), "%08x", random_number(INT_MAX));
+
+        md5_init_ctx (&ctx);
+        // md5_process_bytes (hash, MD5_DIGEST_SIZE, &ctx);
+        md5_process_bytes (a1buf, MD5_DIGEST_SIZE * 2, &ctx);
+        md5_process_bytes ((unsigned char *)":", 1, &ctx);
+        md5_process_bytes ((unsigned char *)nonce, strlen (nonce), &ctx);
+        md5_process_bytes ((unsigned char *)":", 1, &ctx);
+        md5_process_bytes ((unsigned char *)cnonce, strlen (cnonce), &ctx);
+        md5_finish_ctx (&ctx, hash);
+
+        dump_hash (a1buf, hash);
+      }
 
     /* A2BUF = H(method ":" path) */
     md5_init_ctx (&ctx);
@@ -3715,11 +3747,12 @@ digest_authentication_encode (const char *au, const char *user,
     md5_finish_ctx (&ctx, hash);
     dump_hash (a2buf, hash);
 
-    if (!strcmp(qop,"auth"))
+    if (!strcmp(qop, "auth") || !strcmp (qop, "auth-int"))
       {
         /* RFC 2617 Digest Access Authentication */
         /* generate random hex string */
-        snprintf(cnonce, sizeof(cnonce), "%08x", random_number(INT_MAX));
+        if (!*cnonce)
+          snprintf(cnonce, sizeof(cnonce), "%08x", random_number(INT_MAX));
 
         /* RESPONSE_DIGEST = H(A1BUF ":" nonce ":" noncecount ":" clientnonce ":" qop ": " A2BUF) */
         md5_init_ctx (&ctx);
@@ -3752,20 +3785,21 @@ digest_authentication_encode (const char *au, const char *user,
     dump_hash (response_digest, hash);
 
     res_size = strlen (user)
-             + strlen (user)
              + strlen (realm)
              + strlen (nonce)
              + strlen (path)
              + 2 * MD5_DIGEST_SIZE /*strlen (response_digest)*/
              + (opaque ? strlen (opaque) : 0)
+             + (algorithm ? strlen (algorithm) : 0)
              + (qop ? 128: 0)
+             + strlen (cnonce)
              + 128;
 
     res = xmalloc (res_size);
 
     if (!strcmp(qop,"auth"))
       {
-        snprintf (res, res_size, "Digest "\
+        res_len = snprintf (res, res_size, "Digest "\
                 "username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", response=\"%s\""\
                 ", qop=auth, nc=00000001, cnonce=\"%s\"",
                   user, realm, nonce, path, response_digest, cnonce);
@@ -3773,17 +3807,19 @@ digest_authentication_encode (const char *au, const char *user,
       }
     else
       {
-        snprintf (res, res_size, "Digest "\
+        res_len = snprintf (res, res_size, "Digest "\
                 "username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", response=\"%s\"",
                   user, realm, nonce, path, response_digest);
       }
 
     if (opaque)
       {
-        char *p = res + strlen (res);
-        strcat (p, ", opaque=\"");
-        strcat (p, opaque);
-        strcat (p, "\"");
+        res_len += snprintf(res + res_len, res_size - res_len, ", opaque=\"%s\"", opaque);
+      }
+
+    if (algorithm)
+      {
+        snprintf(res + res_len, res_size - res_len, ", algorithm=\"%s\"", algorithm);
       }
   }
   return res;

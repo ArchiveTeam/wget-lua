@@ -245,15 +245,10 @@ static bool
 warc_write_block_from_file (FILE *data_in)
 {
   /* Add the Content-Length header. */
-  char *content_length;
+  char content_length[MAX_INT_TO_STRING_LEN(off_t)];
   fseeko (data_in, 0L, SEEK_END);
-  if (! asprintf (&content_length, "%ld", ftello (data_in)))
-    {
-      warc_write_ok = false;
-      return false;
-    }
+  number_to_string (content_length, ftello (data_in));
   warc_write_header ("Content-Length", content_length);
-  free (content_length);
 
   /* End of the WARC header section. */
   warc_write_string ("\r\n");
@@ -532,7 +527,7 @@ warc_sha1_stream_with_payload (FILE *stream, void *res_block, void *res_payload,
 static char *
 warc_base32_sha1_digest (char *sha1_digest)
 {
-  // length: "sha1:" + digest + "\0"
+  /* length: "sha1:" + digest + "\0" */
   char *sha1_base32 = malloc (BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5 );
   base32_encode (sha1_digest, SHA1_DIGEST_SIZE, sha1_base32 + 5,
                  BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1);
@@ -1230,10 +1225,14 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
   if (redirect_location == NULL || strlen(redirect_location) == 0)
     redirect_location = "-";
 
+  char offset_string[MAX_INT_TO_STRING_LEN(off_t)];
+  number_to_string (offset_string, offset);
+
   /* Print the CDX line. */
-  fprintf (warc_current_cdx_file, "%s %s %s %s %d %s %s - %ld %s %s\n", url,
+  fprintf (warc_current_cdx_file, "%s %s %s %s %d %s %s - %s %s %s\n", url,
            timestamp_str_cdx, url, mime_type, response_code, checksum,
-           redirect_location, offset, warc_current_filename, response_uuid);
+           redirect_location, offset_string, warc_current_filename,
+           response_uuid);
   fflush (warc_current_cdx_file);
 
   return true;
