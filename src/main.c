@@ -439,6 +439,8 @@ Startup:\n"),
   -b,  --background        go to background after startup.\n"),
     N_("\
   -e,  --execute=COMMAND   execute a `.wgetrc'-style command.\n"),
+    N_("\
+       --lua-script=FILE   load the Lua script from FILE.\n"),
     "\n",
 
     N_("\
