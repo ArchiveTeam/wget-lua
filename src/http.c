@@ -2929,11 +2929,6 @@ http_loop (struct url *u, struct url *original_url, char **newloc,
   bool force_full_retrieve = false;
 
 
-  /* If we are writing to a WARC file: always retrieve the whole file. */
-  if (opt.warc_filename != NULL)
-    force_full_retrieve = true;
-
-
   /* Assert that no value for *LOCAL_FILE was passed. */
   assert (local_file == NULL || *local_file == NULL);
 
@@ -3050,7 +3045,10 @@ Spider mode enabled. Check if remote file exists.\n"));
         *dt &= ~HEAD_ONLY;
 
       /* Decide whether or not to restart.  */
-      if (force_full_retrieve)
+      if (opt.warc_filename != NULL)
+        /* Always download the complete file. */
+        hstat.restval = 0;
+      else if (force_full_retrieve)
         hstat.restval = hstat.len;
       else if (opt.always_rest
           && got_name
