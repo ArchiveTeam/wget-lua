@@ -354,6 +354,7 @@ urlpos_to_lua_table (const struct urlpos *upos)
       LUA_PUSH_FROM_STRUCT (integer, upos, link_relative_p);
       LUA_PUSH_FROM_STRUCT (integer, upos, link_complete_p);
       LUA_PUSH_FROM_STRUCT (integer, upos, link_base_p);
+      LUA_PUSH_FROM_STRUCT (integer, upos, link_inline_p);
       LUA_PUSH_FROM_STRUCT (integer, upos, link_css_p);
       LUA_PUSH_FROM_STRUCT (integer, upos, link_expect_html);
       LUA_PUSH_FROM_STRUCT (integer, upos, link_expect_css);
