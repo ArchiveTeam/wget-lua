@@ -273,6 +273,7 @@ static struct cmdline_option option_data[] =
     { "restrict-file-names", 0, OPT_BOOLEAN, "restrictfilenames", -1 },
     { "retr-symlinks", 0, OPT_BOOLEAN, "retrsymlinks", -1 },
     { "retry-connrefused", 0, OPT_BOOLEAN, "retryconnrefused", -1 },
+    { "rotate-dns", 0, OPT_BOOLEAN, "rotatedns", -1 },
     { "save-cookies", 0, OPT_VALUE, "savecookies", -1 },
     { "save-headers", 0, OPT_BOOLEAN, "saveheaders", -1 },
     { IF_SSL ("secure-protocol"), 0, OPT_VALUE, "secureprotocol", -1 },
@@ -526,6 +527,8 @@ Download:\n"),
        --limit-rate=RATE         limit download rate to RATE.\n"),
     N_("\
        --no-dns-cache            disable caching DNS lookups.\n"),
+    N_("\
+       --rotate-dns              use a different IP for each request.\n"),
     N_("\
        --restrict-file-names=OS  restrict chars in file names to ones OS allows.\n"),
     N_("\
@@ -1195,6 +1198,13 @@ main (int argc, char **argv)
                _("Both --no-clobber and --convert-links were specified,"
                  " only --convert-links will be used.\n"));
       opt.noclobber = false;
+    }
+
+  if (opt.rotate_dns && !opt.dns_cache)
+    {
+      fprintf (stderr,
+               _("--rotate-dns has no effect if it is combined with "
+                 "--no-dns-cache.\n"));
     }
 
   if (opt.reclevel == 0)

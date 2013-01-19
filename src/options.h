@@ -90,6 +90,7 @@ struct options
   char **domains;		/* See host.c */
   char **exclude_domains;
   bool dns_cache;		/* whether we cache DNS lookups. */
+  bool rotate_dns;  /* Whether the DNS address list should be rotated after each request.  */
 
   char **follow_tags;           /* List of HTML tags to recursively follow. */
   char **ignore_tags;           /* List of HTML tags to ignore if recursing. */

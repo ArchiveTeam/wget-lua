@@ -258,6 +258,7 @@ static const struct {
   { "retrsymlinks",     &opt.retr_symlinks,     cmd_boolean },
   { "retryconnrefused", &opt.retry_connrefused, cmd_boolean },
   { "robots",           &opt.use_robots,        cmd_boolean },
+  { "rotatedns",        &opt.rotate_dns,        cmd_boolean },
   { "savecookies",      &opt.cookies_output,    cmd_file },
   { "saveheaders",      &opt.save_headers,      cmd_boolean },
 #ifdef HAVE_SSL
