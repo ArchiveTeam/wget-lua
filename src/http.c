@@ -3092,6 +3092,8 @@ Spider mode enabled. Check if remote file exists.\n"));
           case LUAHOOK_NOTHING:
             break;
           case LUAHOOK_CONTINUE:
+            if (pconn_active)
+              invalidate_persistent();
             continue;
           case LUAHOOK_EXIT:
             goto exit;
