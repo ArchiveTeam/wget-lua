@@ -320,7 +320,7 @@ static struct cmdline_option option_data[] =
 static char *
 no_prefix (const char *s)
 {
-  static char buffer[1024];
+  static char buffer[2048];
   static char *p = buffer;
 
   char *cp = p;
