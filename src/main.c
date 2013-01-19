@@ -283,6 +283,7 @@ static struct cmdline_option option_data[] =
     { "timeout", 'T', OPT_VALUE, "timeout", -1 },
     { "timestamping", 'N', OPT_BOOLEAN, "timestamping", -1 },
     { "tries", 't', OPT_VALUE, "tries", -1 },
+    { "truncate-output", 0, OPT_BOOLEAN, "truncateoutput", -1 },
     { "unlink", 0, OPT_BOOLEAN, "unlink", -1 },
     { "trust-server-names", 0, OPT_BOOLEAN, "trustservernames", -1 },
     { "use-server-timestamps", 0, OPT_BOOLEAN, "useservertimestamps", -1 },
@@ -1249,8 +1250,8 @@ with -p or -r. See the manual for details.\n\n"), stderr);
           print_usage (1);
           exit (1);
         }
-      if (opt.page_requisites
-          || opt.recursive)
+      if ((opt.page_requisites || opt.recursive)
+          && !opt.truncate_output_document)
         {
           logprintf (LOG_NOTQUIET, "%s", _("\
 WARNING: combining -O with -r or -p will mean that all downloaded content\n\

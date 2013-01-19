@@ -271,6 +271,7 @@ static const struct {
   { "timeout",          NULL,                   cmd_spec_timeout },
   { "timestamping",     &opt.timestamping,      cmd_boolean },
   { "tries",            &opt.ntry,              cmd_number_inf },
+  { "truncateoutput",   &opt.truncate_output_document, cmd_boolean },
   { "trustservernames", &opt.trustservernames,  cmd_boolean },
   { "unlink",           &opt.unlink,            cmd_boolean },
   { "useproxy",         &opt.use_proxy,         cmd_boolean },
@@ -391,6 +392,8 @@ defaults (void)
 
   opt.useservertimestamps = true;
   opt.show_all_dns_entries = false;
+
+  opt.truncate_output_document = false;
 
   opt.warc_maxsize = 0; /* 1024 * 1024 * 1024; */
 #ifdef HAVE_LIBZ

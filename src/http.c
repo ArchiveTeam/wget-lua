@@ -2862,7 +2862,21 @@ read_header:
         }
     }
   else
-    fp = output_stream;
+    {
+      fp = output_stream;
+      if (opt.truncate_output_document)
+        {
+          rewind (fp);
+          if (ftruncate (fileno (fp), 0) == -1)
+            {
+              logprintf (LOG_NOTQUIET, "Could not truncate output file: %s\n", strerror (errno));
+              CLOSE_INVALIDATE (sock); 
+              xfree (head); 
+              xfree_null (type); 
+              return FOPENERR; 
+            }
+        }
+    }
 
   /* Print fetch message, if opt.verbose.  */
   if (opt.verbose)

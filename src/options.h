@@ -100,6 +100,8 @@ struct options
 				   FTP. */
   char *output_document;	/* The output file to which the
 				   documents will be printed.  */
+  bool truncate_output_document;	/* The output file will be truncated before
+           each new download. */
   char *warc_filename;		/* WARC output filename */
   char *warc_tempdir;	/* WARC temp dir */
   char *warc_cdx_dedup_filename;	/* CDX file to be used for deduplication. */
