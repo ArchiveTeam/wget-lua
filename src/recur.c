@@ -543,6 +543,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
   const char *url = u->url;
   bool u_scheme_like_http;
   bool verdict = false;
+  download_child_p_reason_t reason = NO_REASON;
 
   DEBUGP (("Deciding whether to enqueue \"%s\".\n", url));
 
@@ -556,6 +557,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
           xfree (referrer);
         }
       DEBUGP (("Already on the black list.\n"));
+      reason = ALREADY_ON_BLACKLIST;
       goto out;
     }
 
@@ -587,6 +589,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
   if (!u_scheme_like_http && !(u->scheme == SCHEME_FTP && opt.follow_ftp))
     {
       DEBUGP (("Not following non-HTTP schemes.\n"));
+      reason = NON_HTTP_SCHEME;
       goto out;
     }
 
@@ -596,6 +599,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
     if (opt.relative_only && !upos->link_relative_p)
       {
         DEBUGP (("It doesn't really look like a relative link.\n"));
+        reason = NOT_A_RELATIVE_LINK;
         goto out;
       }
 
@@ -604,6 +608,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
   if (!accept_domain (u))
     {
       DEBUGP (("The domain was not accepted.\n"));
+      reason = DOMAIN_NOT_ACCEPTED;
       goto out;
     }
 
@@ -623,6 +628,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
         {
           DEBUGP (("Going to \"%s\" would escape \"%s\" with no_parent on.\n",
                    u->dir, start_url_parsed->dir));
+          reason = IN_PARENT_DIRECTORY;
           goto out;
         }
     }
@@ -635,12 +641,14 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
       if (!accdir (u->dir))
         {
           DEBUGP (("%s (%s) is excluded/not-included.\n", url, u->dir));
+          reason = DIRECTORY_EXCLUDED;
           goto out;
         }
     }
   if (!accept_url (url))
     {
       DEBUGP (("%s is excluded/not-included through regex.\n", url));
+      reason = REGEX_EXCLUDED;
       goto out;
     }
 
@@ -665,6 +673,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
         {
           DEBUGP (("%s (%s) does not match acc/rej rules.\n",
                    url, u->file));
+          reason = PATTERN_EXCLUDED;
           goto out;
         }
     }
@@ -675,6 +684,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
       {
         DEBUGP (("This is not the same hostname as the parent's (%s and %s).\n",
                  u->host, parent->host));
+        reason = DIFFERENT_HOST;
         goto out;
       }
 
@@ -717,6 +727,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
         {
           DEBUGP (("Not following %s because robots.txt forbids it.\n", url));
           string_set_add (blacklist, url);
+          reason = ROBOTS_TXT_FORBIDDEN;
           goto out;
         }
     }
@@ -727,7 +738,7 @@ download_child_p (const struct urlpos *upos, struct url *parent, int depth,
 
  out:
   verdict = luahooks_download_child_p (upos, parent, depth, start_url_parsed,
-                                       iri, verdict);
+                                       iri, verdict, reason);
 
   if (verdict)
     DEBUGP (("Decided to load it.\n"));

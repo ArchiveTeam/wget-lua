@@ -47,4 +47,19 @@ struct urlpos;
 void recursive_cleanup (void);
 uerr_t retrieve_tree (struct url *, struct iri *);
 
+typedef enum
+{
+  NO_REASON,
+  ALREADY_ON_BLACKLIST,
+  NON_HTTP_SCHEME,
+  NOT_A_RELATIVE_LINK,
+  DOMAIN_NOT_ACCEPTED,
+  IN_PARENT_DIRECTORY,
+  DIRECTORY_EXCLUDED,
+  REGEX_EXCLUDED,
+  PATTERN_EXCLUDED,
+  DIFFERENT_HOST,
+  ROBOTS_TXT_FORBIDDEN
+} download_child_p_reason_t;
+
 #endif /* RECUR_H */

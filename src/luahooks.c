@@ -273,6 +273,26 @@ url_scheme_to_string (const enum url_scheme v)
   return NULL;
 }
 
+static char *
+download_child_p_reason_to_string (const download_child_p_reason_t v)
+{
+  switch (v)
+    {
+      case NO_REASON: return NULL;
+      CONST_CASE (ALREADY_ON_BLACKLIST)
+      CONST_CASE (NON_HTTP_SCHEME)
+      CONST_CASE (NOT_A_RELATIVE_LINK)
+      CONST_CASE (DOMAIN_NOT_ACCEPTED)
+      CONST_CASE (IN_PARENT_DIRECTORY)
+      CONST_CASE (DIRECTORY_EXCLUDED)
+      CONST_CASE (REGEX_EXCLUDED)
+      CONST_CASE (PATTERN_EXCLUDED)
+      CONST_CASE (DIFFERENT_HOST)
+      CONST_CASE (ROBOTS_TXT_FORBIDDEN)
+    }
+  return NULL;
+}
+
 #undef CONST_CASE
 
 #define LUA_PUSH_FROM_STRUCT(TYPE, STRUCT, FIELD) \
@@ -411,7 +431,7 @@ luahooks_httploop_result (const struct url *url, const uerr_t err, const struct 
 bool
 luahooks_download_child_p (const struct urlpos *upos, struct url *parent, int depth,
                            struct url *start_url_parsed, struct iri *iri,
-                           bool verdict)
+                           bool verdict, download_child_p_reason_t reason)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "download_child_p"))
     return verdict;
@@ -422,8 +442,9 @@ luahooks_download_child_p (const struct urlpos *upos, struct url *parent, int de
   url_to_lua_table (start_url_parsed);
   iri_to_lua_table (iri);
   lua_pushboolean (lua, verdict);
+  lua_pushstring (lua, download_child_p_reason_to_string (reason));
 
-  int res = lua_pcall (lua, 6, 1, 0);
+  int res = lua_pcall (lua, 7, 1, 0);
   if (res != 0)
     {
       handle_lua_error (res);
