@@ -5,6 +5,7 @@
 #include "url.h"
 #include "convert.h"
 #include "iri.h"
+#include "exits.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,6 +160,18 @@ luahooks_init ()
   LUA_PUSH_TO_TABLE (integer, "ABORT", LUAHOOK_ABORT);
   lua_setfield (lua, -2, "actions");
 
+  lua_newtable (lua);
+  LUA_PUSH_TO_TABLE (integer, "SUCCESS", WGET_EXIT_SUCCESS);
+  LUA_PUSH_TO_TABLE (integer, "MINIMUM", WGET_EXIT_MINIMUM);
+  LUA_PUSH_TO_TABLE (integer, "IO_FAIL", WGET_EXIT_IO_FAIL);
+  LUA_PUSH_TO_TABLE (integer, "NETWORK_FAIL", WGET_EXIT_NETWORK_FAIL);
+  LUA_PUSH_TO_TABLE (integer, "SSL_AUTH_FAIL", WGET_EXIT_SSL_AUTH_FAIL);
+  LUA_PUSH_TO_TABLE (integer, "SERVER_AUTH_FAIL", WGET_EXIT_SERVER_AUTH_FAIL);
+  LUA_PUSH_TO_TABLE (integer, "PROTOCOL_ERROR", WGET_EXIT_PROTOCOL_ERROR);
+  LUA_PUSH_TO_TABLE (integer, "SERVER_ERROR", WGET_EXIT_SERVER_ERROR);
+  LUA_PUSH_TO_TABLE (integer, "UNKNOWN", WGET_EXIT_UNKNOWN);
+  lua_setfield (lua, -2, "exits");
+
   lua_setglobal (lua, "wget");
 
   int res = luaL_dofile (lua, opt.lua_filename);
@@ -289,6 +302,24 @@ download_child_p_reason_to_string (const download_child_p_reason_t v)
       CONST_CASE (PATTERN_EXCLUDED)
       CONST_CASE (DIFFERENT_HOST)
       CONST_CASE (ROBOTS_TXT_FORBIDDEN)
+    }
+  return NULL;
+}
+
+static char *
+exit_status_to_string (const int v)
+{
+  switch (v)
+    {
+      CONST_CASE (WGET_EXIT_SUCCESS);
+      CONST_CASE (WGET_EXIT_MINIMUM);
+      /* CONST_CASE (WGET_EXIT_IO_FAIL); is equal to WGET_EXIT_MINIMUM */
+      CONST_CASE (WGET_EXIT_NETWORK_FAIL);
+      CONST_CASE (WGET_EXIT_SSL_AUTH_FAIL);
+      CONST_CASE (WGET_EXIT_SERVER_AUTH_FAIL);
+      CONST_CASE (WGET_EXIT_PROTOCOL_ERROR);
+      CONST_CASE (WGET_EXIT_SERVER_ERROR);
+      CONST_CASE (WGET_EXIT_UNKNOWN);
     }
   return NULL;
 }
@@ -536,6 +567,52 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
       /* Remove table. */
       lua_pop (lua, 1);
       return head;
+    }
+}
+
+void
+luahooks_finish (double start_time, double end_time,
+                 int numurls, SUM_SIZE_INT total_downloaded_bytes,
+                 double total_download_time)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "finish"))
+    return;
+
+  lua_pushnumber (lua, start_time);
+  lua_pushnumber (lua, end_time);
+  lua_pushnumber (lua, (end_time - start_time));
+  lua_pushinteger (lua, numurls);
+  /* Push the number of downloaded bytes as a double.  */
+  lua_pushnumber (lua, total_downloaded_bytes);
+  lua_pushnumber (lua, total_download_time);
+
+  int res = lua_pcall (lua, 6, 0, 0);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+    }
+}
+
+int
+luahooks_before_exit (int exit_status)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "before_exit"))
+    return exit_status;
+
+  lua_pushinteger (lua, exit_status);
+  lua_pushstring (lua, exit_status_to_string (exit_status));
+
+  int res = lua_pcall (lua, 2, 1, 0);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return exit_status;
+    }
+  else
+    {
+      int answer = lua_tointeger (lua, -1);
+      lua_pop (lua, 1);
+      return answer;
     }
 }
 

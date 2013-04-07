@@ -1606,6 +1606,9 @@ outputting to a regular file.\n"));
   if (opt.recursive && opt.spider)
     print_broken_links ();
 
+  double end_time = ptimer_measure (timer);
+  ptimer_destroy (timer);
+
   /* Print the downloaded sum.  */
   if ((opt.recursive || opt.page_requisites
        || nurl > 1
@@ -1613,9 +1616,6 @@ outputting to a regular file.\n"));
       &&
       total_downloaded_bytes != 0)
     {
-      double end_time = ptimer_measure (timer);
-      ptimer_destroy (timer);
-
       char *wall_time = xstrdup (secs_to_human_time (end_time - start_time));
       char *download_time = xstrdup (secs_to_human_time (total_download_time));
       logprintf (LOG_NOTQUIET,
@@ -1645,7 +1645,15 @@ outputting to a regular file.\n"));
 
   cleanup ();
 
-  exit (get_exit_status ());
+  luahooks_finish (start_time, end_time,
+                   numurls, total_downloaded_bytes, total_download_time);
+
+  int exit_status = get_exit_status ();
+
+  /* The Lua script can change the exit status.  */
+  exit_status = luahooks_before_exit (exit_status);
+
+  exit (exit_status);
 }
 #endif /* TESTING */
 

@@ -26,5 +26,23 @@ void inform_exit_status (uerr_t err);
 
 int get_exit_status (void);
 
+/* Final exit code possibilities. Exit codes 1 and 2 are reserved
+ * for situations that lead to direct exits from Wget, not using the
+ * value of final_exit_status. */
+enum
+  {
+    WGET_EXIT_SUCCESS = 0,
+
+    WGET_EXIT_MINIMUM = 3,
+    WGET_EXIT_IO_FAIL = WGET_EXIT_MINIMUM,
+    WGET_EXIT_NETWORK_FAIL = 4,
+    WGET_EXIT_SSL_AUTH_FAIL = 5,
+    WGET_EXIT_SERVER_AUTH_FAIL = 6,
+    WGET_EXIT_PROTOCOL_ERROR = 7,
+    WGET_EXIT_SERVER_ERROR = 8,
+
+    WGET_EXIT_UNKNOWN
+  };
+
 
 #endif /* WGET_EXITS_H */
