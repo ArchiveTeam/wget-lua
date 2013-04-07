@@ -311,15 +311,15 @@ exit_status_to_string (const int v)
 {
   switch (v)
     {
-      CONST_CASE (WGET_EXIT_SUCCESS);
-      CONST_CASE (WGET_EXIT_MINIMUM);
-      /* CONST_CASE (WGET_EXIT_IO_FAIL); is equal to WGET_EXIT_MINIMUM */
-      CONST_CASE (WGET_EXIT_NETWORK_FAIL);
-      CONST_CASE (WGET_EXIT_SSL_AUTH_FAIL);
-      CONST_CASE (WGET_EXIT_SERVER_AUTH_FAIL);
-      CONST_CASE (WGET_EXIT_PROTOCOL_ERROR);
-      CONST_CASE (WGET_EXIT_SERVER_ERROR);
-      CONST_CASE (WGET_EXIT_UNKNOWN);
+      case WGET_EXIT_SUCCESS: return "SUCCESS";
+      /* Equal to IO_FAIL:  case WGET_EXIT_MINIMUM: return "MINIMUM"; */
+      case WGET_EXIT_IO_FAIL: return "IO_FAIL";
+      case WGET_EXIT_NETWORK_FAIL: return "NETWORK_FAIL";
+      case WGET_EXIT_SSL_AUTH_FAIL: return "SSL_AUTH_FAIL";
+      case WGET_EXIT_SERVER_AUTH_FAIL: return "SERVER_AUTH_FAIL";
+      case WGET_EXIT_PROTOCOL_ERROR: return "PROTOCOL_ERROR";
+      case WGET_EXIT_SERVER_ERROR: return "SERVER_ERROR";
+      case WGET_EXIT_UNKNOWN: return "UNKNOWN";
     }
   return NULL;
 }
