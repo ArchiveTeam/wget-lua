@@ -28,3 +28,12 @@ wget.callbacks.get_urls = function(file, url, is_css, iri)
   end
 end
 
+wget.callbacks.finish = function(start_time, end_time, wall_time, numurls, total_downloaded_bytes, total_download_time)
+  print(table.show({start_time=start_time, end_time=end_time, wall_time=wall_time, numurls=numurls, total_downloaded_bytes=total_downloaded_bytes, total_download_time=total_download_time}, "finish"))
+end
+
+wget.callbacks.before_exit = function(exit_status, exit_status_string)
+  print(table.show({exit_status=exit_status, exit_status_string=exit_status_string}, "before_exit"))
+  return exit_status
+end
+
