@@ -1,3 +1,22 @@
+2013-03-31  Gijs van Tulder  <gvtulder@gmail.com>
+
+	* warc.c: Correctly write the field length in the skip length field
+	of .warc.gz files. (Following the GZIP spec in RFC 1952.)
+
+2013-03-12  Darshit Shah <darnir@gmail.com>
+
+	* http.c (gethttp): Make wget return FILEBADFILE error and abort if
+	post-file does not exist.
+
+	* http.c (http_loop): Handle FILEBADFILE as a valid err.
+
+	* exits.c (get_status_for_err): Mark FILEBADFILE as an IO error.
+
+2013-02-15  Darshit Shah <darnir@gmail.com>
+
+	* cookies.c (cookie_handle_set_cookie): Set cookie->discard_requested
+	to true on domain mismatch.
+
 2012-12-20  Tim Ruehsen  <tim.ruehsen@gmx.de>
 
 	* gnutls.c (ssl_connect_wget): added +VERS-SSL3.0 to fix
