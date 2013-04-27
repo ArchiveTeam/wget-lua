@@ -136,6 +136,8 @@ static const struct {
   { "backups",          &opt.backups,           cmd_number },
   { "base",             &opt.base_href,         cmd_string },
   { "bindaddress",      &opt.bind_address,      cmd_string },
+  { "bodydata",         &opt.body_data,         cmd_string },
+  { "bodyfile",         &opt.body_file,         cmd_string },
 #ifdef HAVE_SSL
   { "cacertificate",    &opt.ca_cert,           cmd_file },
 #endif
@@ -157,7 +159,7 @@ static const struct {
 #ifdef ENABLE_DEBUG
   { "debug",            &opt.debug,             cmd_boolean },
 #endif
-  { "defaultpage", 	&opt.default_page,      cmd_string},
+  { "defaultpage", 	&opt.default_page,      cmd_string },
   { "deleteafter",      &opt.delete_after,      cmd_boolean },
   { "dirprefix",        &opt.dir_prefix,        cmd_directory },
   { "dirstruct",        NULL,                   cmd_spec_dirstruct },
@@ -213,6 +215,7 @@ static const struct {
   { "luafilename",      &opt.lua_filename,      cmd_file },
 #endif
   { "maxredirect",      &opt.max_redirect,      cmd_number },
+  { "method",           &opt.method,            cmd_string },
   { "mirror",           NULL,                   cmd_spec_mirror },
   { "netrc",            &opt.netrc,             cmd_boolean },
   { "noclobber",        &opt.noclobber,         cmd_boolean },
@@ -1761,6 +1764,7 @@ cleanup (void)
   xfree_null (opt.user);
   xfree_null (opt.passwd);
   xfree_null (opt.base_href);
+  xfree_null (opt.method);
 
 #endif /* DEBUG_MALLOC */
 }

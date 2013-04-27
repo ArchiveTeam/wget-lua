@@ -548,13 +548,29 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
                   cur->link_expect_css = lua_tointeger (lua, -1) == 1 ? 1 : 0;
                   lua_pop (lua, 1);
 
+                  cur->body_data = NULL;
+                  cur->method = NULL;
+
                   lua_getfield (lua, -1, "post_data");
                   ret = lua_tostring (lua, -1);
                   lua_pop (lua, 1);
                   if (ret)
-                    cur->post_data = strdup (ret);
-                  else
-                    cur->post_data = NULL;
+                    {
+                      cur->body_data = strdup (ret);
+                      cur->method = strdup ("POST");
+                    }
+
+                  lua_getfield (lua, -1, "body_data");
+                  ret = lua_tostring (lua, -1);
+                  lua_pop (lua, 1);
+                  if (ret)
+                    cur->body_data = strdup (ret);
+
+                  lua_getfield (lua, -1, "method");
+                  ret = lua_tostring (lua, -1);
+                  lua_pop (lua, 1);
+                  if (ret)
+                    cur->method = strdup (ret);
 
                   cur->next = head;
                   head = cur;

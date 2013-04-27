@@ -702,9 +702,10 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
   char *local_file;
   int redirection_count = 0;
 
-  bool post_data_suspended = false;
-  char *saved_post_data = NULL;
-  char *saved_post_file_name = NULL;
+  bool body_data_suspended = false;
+  char *saved_body_data = NULL;
+  char *saved_body_file_name = NULL;
+  char *saved_method = NULL;
 
   /* If dt is NULL, use local storage.  */
   if (!dt)
@@ -745,7 +746,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
                      proxy, error);
           xfree (url);
           xfree (error);
-          RESTORE_POST_DATA;
+          RESTORE_BODY_DATA;
           result = PROXERR;
           goto bail;
         }
@@ -754,7 +755,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
           logprintf (LOG_NOTQUIET, _("Error in proxy URL %s: Must be HTTP.\n"), proxy);
           url_free (proxy_url);
           xfree (url);
-          RESTORE_POST_DATA;
+          RESTORE_BODY_DATA;
           result = PROXERR;
           goto bail;
         }
@@ -838,7 +839,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
           xfree (url);
           xfree (mynewloc);
           xfree (error);
-          RESTORE_POST_DATA;
+          RESTORE_BODY_DATA;
           goto bail;
         }
 
@@ -860,7 +861,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
             }
           xfree (url);
           xfree (mynewloc);
-          RESTORE_POST_DATA;
+          RESTORE_BODY_DATA;
           result = WRONGCODE;
           goto bail;
         }
@@ -883,8 +884,8 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
 	 RFC2616 HTTP/1.1 introduces code 307 Temporary Redirect
 	 specifically to preserve the method of the request.
 	 */
-      if (result != NEWLOCATION_KEEP_POST && !post_data_suspended)
-        SUSPEND_POST_DATA;
+      if (result != NEWLOCATION_KEEP_POST && !body_data_suspended)
+        SUSPEND_BODY_DATA;
 
       goto redirected;
     }
@@ -947,7 +948,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
       xfree (url);
     }
 
-  RESTORE_POST_DATA;
+  RESTORE_BODY_DATA;
 
 bail:
   if (register_status)

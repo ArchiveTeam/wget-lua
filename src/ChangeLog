@@ -1,3 +1,39 @@
+2013-04-24  Darshit Shah <darnir@gmail.com>
+
+	* http.c (gethttp): Remove check for opt.post_data and
+	opt.post_file_name.
+	* main.c (main): Change location in code where --post-data and
+	--post-file options are converted to --body-data --body-file.
+
+2013-04-21  Gijs van Tulder  <gvtulder@gmail.com>
+
+	* http.c: Copy opt.body_data to the WARC file, instead of
+	opt.post_data (the old option).
+
+2013-04-12  Gijs van Tulder  <gvtulder@gmail.com>
+
+	* warc.c: Generate unique UUIDs for the manifest and the record
+	holding the command-line arguments.
+	Write the manifest to a "metadata" record to follow the WARC
+	implementation guidelines.
+	* warc.h: Declare new function warc_write_metadata_record.
+
+2013-03-15  Darshit Shah <darnir@gmail.com>
+
+	* http.c (post_file): Rename function to body_file_send to more
+	accurately reflect its use.
+	* http.c (gethttp): Add support for --method, --body-data and
+	--body-file
+	* init.c (commands): Same.
+	* options.h (options): Same.
+	* main.c (option_data): Same.
+	* main.c (print_help): Add --method command.
+	* main.c (main): Make old --post-{data,file} commands aliases to
+	--method.
+	Add sanity checks for --method, --body-data and --body-file.
+	* retr.c (SUSPEND_POST_DATA): Edit Macro Definition to use body_data.
+	* retr.c (RESTORE_POST_DATA): Same.
+
 2013-03-31  Gijs van Tulder  <gvtulder@gmail.com>
 
 	* warc.c: Correctly write the field length in the skip length field

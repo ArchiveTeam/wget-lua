@@ -18,7 +18,8 @@ struct luahooks_url
   const char *url;
   unsigned int link_expect_html;
   unsigned int link_expect_css;
-  char *post_data;
+  char *body_data;
+  char *method;
   struct luahooks_url *next;
 };
 
