@@ -434,6 +434,42 @@ iri_to_lua_table (const struct iri *i)
 
 #undef LUA_PUSH_FROM_STRUCT
 
+#define MAX_HOST_LENGTH 255
+/* luahooks_lookup_host reuses this buffer for each response. */
+static char lookup_host_result[MAX_HOST_LENGTH + 1];
+
+const char *
+luahooks_lookup_host (const char *host)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "lookup_host"))
+    return NULL;
+
+  lua_pushstring (lua, host);
+
+  int res = lua_pcall (lua, 1, 1, 0);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return NULL;
+    }
+  else
+    {
+      /* The lookup_host function can return an alternative hostname or IP. */
+      const char *ret = lua_tostring (lua, -1);
+      if (ret == NULL)
+        return NULL;
+
+      /* Copy to the buffer. */
+      size_t ret_l = lua_strlen(lua, -1);
+      ret_l = (ret_l <= MAX_HOST_LENGTH) ? ret_l : MAX_HOST_LENGTH;
+      strncpy (lookup_host_result, ret, ret_l);
+
+      lua_pop (lua, 1);
+      return lookup_host_result;
+    }
+}
+#undef MAX_HOST_LENGTH
+
 luahook_action_t
 luahooks_httploop_result (const struct url *url, const uerr_t err, const struct http_stat *hstat)
 {

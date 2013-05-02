@@ -24,6 +24,7 @@ struct luahooks_url
 };
 
 void luahooks_init ();
+const char *luahooks_lookup_host (const char *host);
 luahook_action_t luahooks_httploop_result (const struct url *url,
                     const uerr_t err, const struct http_stat *hstat);
 bool luahooks_download_child_p (const struct urlpos *upos,

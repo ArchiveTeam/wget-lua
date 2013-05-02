@@ -61,6 +61,7 @@ as that of the covered work.  */
 #include "host.h"
 #include "url.h"
 #include "hash.h"
+#include "luahooks.h"
 
 #ifndef NO_ADDRESS
 # define NO_ADDRESS NO_DATA
@@ -689,6 +690,11 @@ lookup_host (const char *host, int flags)
   bool use_cache;
   bool numeric_address = false;
   double timeout = opt.dns_timeout;
+
+  /* Allow the Lua script to override the hostname. */
+  const char *alternative_host = luahooks_lookup_host (host);
+  if (alternative_host)
+    host = alternative_host;
 
 #ifndef ENABLE_IPV6
   /* If we're not using getaddrinfo, first check if HOST specifies a
