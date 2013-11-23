@@ -1,3 +1,8 @@
+2013-06-17  Dave Reisner  <dreisner@archlinux.org>
+
+       * texi2pod.pl: Fix formatting error that causes build to fail with
+       Perl 5.18
+
 2012-10-07  Giuseppe Scrivano  <gscrivano@gnu.org>
 
 	* configure.ac: Check for patchconf.
