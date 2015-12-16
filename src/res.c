@@ -1,6 +1,6 @@
 /* Support for Robot Exclusion Standard (RES).
-   Copyright (C) 2001, 2006, 2007, 2008, 2009, 2010, 2011 Free Software
-   Foundation, Inc.
+   Copyright (C) 2001, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free
+   Software Foundation, Inc.
 
 This file is part of Wget.
 
@@ -81,6 +81,7 @@ as that of the covered work.  */
 #include "url.h"
 #include "retr.h"
 #include "res.h"
+#include "c-strcase.h"
 
 #ifdef TESTING
 #include "test.h"
@@ -97,7 +98,7 @@ struct robot_specs {
   int size;
   struct path_info *paths;
 };
-
+
 /* Parsing the robot spec. */
 
 /* Check whether AGENT (a string of length LENGTH) equals "wget" or
@@ -403,10 +404,10 @@ free_specs (struct robot_specs *specs)
   int i;
   for (i = 0; i < specs->count; i++)
     xfree (specs->paths[i].path);
-  xfree_null (specs->paths);
+  xfree (specs->paths);
   xfree (specs);
 }
-
+
 /* Matching of a path according to the specs. */
 
 /* If C is '%' and (ptr[1], ptr[2]) form a hexadecimal number, and if
@@ -471,7 +472,7 @@ res_match_path (const struct robot_specs *specs, const char *path)
       }
   return true;
 }
-
+
 /* Registering the specs. */
 
 static struct hash_table *registered_specs;
@@ -521,7 +522,7 @@ res_get_specs (const char *host, int port)
     return NULL;
   return hash_table_get (registered_specs, hp);
 }
-
+
 /* Loading the robots file.  */
 
 #define RES_SPECS_LOCATION "/robots.txt"
@@ -578,11 +579,10 @@ res_retrieve_file (const char *url, char **file, struct iri *iri)
          allocated the file name, deallocate is here so that the
          caller doesn't have to worry about it.  */
       xfree (*file);
-      *file = NULL;
     }
   return err == RETROK;
 }
-
+
 bool
 is_robots_txt_url (const char *url)
 {
@@ -593,7 +593,7 @@ is_robots_txt_url (const char *url)
 
   return ret;
 }
-
+
 void
 res_cleanup (void)
 {
@@ -611,15 +611,15 @@ res_cleanup (void)
       registered_specs = NULL;
     }
 }
-
+
 #ifdef TESTING
 
 const char *
-test_is_robots_txt_url()
+test_is_robots_txt_url(void)
 {
-  int i;
-  struct {
-    char *url;
+  unsigned i;
+  static const struct {
+    const char *url;
     bool expected_result;
   } test_array[] = {
     { "http://www.yoyodyne.com/robots.txt", true },
@@ -627,7 +627,7 @@ test_is_robots_txt_url()
     { "http://www.yoyodyne.com/somepath/robots.txt", false },
   };
 
-  for (i = 0; i < sizeof(test_array)/sizeof(test_array[0]); ++i)
+  for (i = 0; i < countof(test_array); ++i)
     {
       mu_assert ("test_is_robots_txt_url: wrong result",
                  is_robots_txt_url (test_array[i].url) == test_array[i].expected_result);
@@ -641,4 +641,3 @@ test_is_robots_txt_url()
 /*
  * vim: et ts=2 sw=2
  */
-

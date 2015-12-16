@@ -1,6 +1,6 @@
 /* NTLM code.
-   Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software
-   Foundation, Inc.
+   Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free
+   Software Foundation, Inc.
    Contributed by Daniel Stenberg.
 
 This file is part of GNU Wget.
@@ -42,68 +42,45 @@ as that of the covered work.  */
 #include <string.h>
 #include <stdlib.h>
 
-#include <openssl/des.h>
-#include <openssl/md4.h>
-#include <openssl/opensslv.h>
-
 #include "utils.h"
 #include "http-ntlm.h"
 
-#if OPENSSL_VERSION_NUMBER < 0x00907001L
-#define DES_key_schedule des_key_schedule
-#define DES_cblock des_cblock
-#define DES_set_odd_parity des_set_odd_parity
-#define DES_set_key des_set_key
-#define DES_ecb_encrypt des_ecb_encrypt
+#ifdef HAVE_NETTLE
+# include <nettle/md4.h>
+# include <nettle/des.h>
+#else
+# include <openssl/des.h>
+# include <openssl/md4.h>
+# include <openssl/opensslv.h>
+
+# if OPENSSL_VERSION_NUMBER < 0x00907001L
+#  define DES_key_schedule des_key_schedule
+#  define DES_cblock des_cblock
+#  define DES_set_odd_parity des_set_odd_parity
+#  define DES_set_key des_set_key
+#  define DES_ecb_encrypt des_ecb_encrypt
 
 /* This is how things were done in the old days */
-#define DESKEY(x) x
-#define DESKEYARG(x) x
-#else
+#  define DESKEY(x) x
+#  define DESKEYARG(x) x
+# else
 /* Modern version */
-#define DESKEYARG(x) *x
-#define DESKEY(x) &x
+#  define DESKEYARG(x) *x
+#  define DESKEY(x) &x
+# endif
+
 #endif
 
 /* Define this to make the type-3 message include the NT response message */
 #define USE_NTRESPONSES 1
-
+
+
 /* Flag bits definitions available at on
    http://davenport.sourceforge.net/ntlm.html */
 
-#define NTLMFLAG_NEGOTIATE_UNICODE               (1<<0)
 #define NTLMFLAG_NEGOTIATE_OEM                   (1<<1)
-#define NTLMFLAG_REQUEST_TARGET                  (1<<2)
-/* unknown (1<<3) */
-#define NTLMFLAG_NEGOTIATE_SIGN                  (1<<4)
-#define NTLMFLAG_NEGOTIATE_SEAL                  (1<<5)
-#define NTLMFLAG_NEGOTIATE_DATAGRAM_STYLE        (1<<6)
-#define NTLMFLAG_NEGOTIATE_LM_KEY                (1<<7)
-#define NTLMFLAG_NEGOTIATE_NETWARE               (1<<8)
 #define NTLMFLAG_NEGOTIATE_NTLM_KEY              (1<<9)
-/* unknown (1<<10) */
-/* unknown (1<<11) */
-#define NTLMFLAG_NEGOTIATE_DOMAIN_SUPPLIED       (1<<12)
-#define NTLMFLAG_NEGOTIATE_WORKSTATION_SUPPLIED  (1<<13)
-#define NTLMFLAG_NEGOTIATE_LOCAL_CALL            (1<<14)
-#define NTLMFLAG_NEGOTIATE_ALWAYS_SIGN           (1<<15)
-#define NTLMFLAG_TARGET_TYPE_DOMAIN              (1<<16)
-#define NTLMFLAG_TARGET_TYPE_SERVER              (1<<17)
-#define NTLMFLAG_TARGET_TYPE_SHARE               (1<<18)
-#define NTLMFLAG_NEGOTIATE_NTLM2_KEY             (1<<19)
-#define NTLMFLAG_REQUEST_INIT_RESPONSE           (1<<20)
-#define NTLMFLAG_REQUEST_ACCEPT_RESPONSE         (1<<21)
-#define NTLMFLAG_REQUEST_NONNT_SESSION_KEY       (1<<22)
-#define NTLMFLAG_NEGOTIATE_TARGET_INFO           (1<<23)
-/* unknown (1<24) */
-/* unknown (1<25) */
-/* unknown (1<26) */
-/* unknown (1<27) */
-/* unknown (1<28) */
-#define NTLMFLAG_NEGOTIATE_128                   (1<<29)
-#define NTLMFLAG_NEGOTIATE_KEY_EXCHANGE          (1<<30)
-#define NTLMFLAG_NEGOTIATE_56                    (1<<31)
-
+
 /*
   (*) = A "security buffer" is a triplet consisting of two shorts and one
   long:
@@ -140,7 +117,7 @@ ntlm_input (struct ntlmdata *ntlm, const char *header)
          (40)    Target Information  (optional) security buffer(*)
          32 (48) start of data block
       */
-      int size;
+      ssize_t size;
       char *buffer = (char *) alloca (strlen (header));
 
       DEBUGP (("Received a type-2 NTLM message.\n"));
@@ -176,6 +153,25 @@ ntlm_input (struct ntlmdata *ntlm, const char *header)
  * Turns a 56 bit key into the 64 bit, odd parity key and sets the key.  The
  * key schedule ks is also set.
  */
+#ifdef HAVE_NETTLE
+static void
+setup_des_key(unsigned char *key_56,
+              struct des_ctx *des)
+{
+  unsigned char key[8];
+
+  key[0] = key_56[0];
+  key[1] = ((key_56[0] << 7) & 0xFF) | (key_56[1] >> 1);
+  key[2] = ((key_56[1] << 6) & 0xFF) | (key_56[2] >> 2);
+  key[3] = ((key_56[2] << 5) & 0xFF) | (key_56[3] >> 3);
+  key[4] = ((key_56[3] << 4) & 0xFF) | (key_56[4] >> 4);
+  key[5] = ((key_56[4] << 3) & 0xFF) | (key_56[5] >> 5);
+  key[6] = ((key_56[5] << 2) & 0xFF) | (key_56[6] >> 6);
+  key[7] =  (key_56[6] << 1) & 0xFF;
+
+  nettle_des_set_key(des, key);
+}
+#else
 static void
 setup_des_key(unsigned char *key_56,
               DES_key_schedule DESKEYARG(ks))
@@ -194,6 +190,7 @@ setup_des_key(unsigned char *key_56,
   DES_set_odd_parity(&key);
   DES_set_key(&key, ks);
 }
+#endif
 
  /*
   * takes a 21 byte array and treats it as 3 56-bit DES keys. The
@@ -203,6 +200,18 @@ setup_des_key(unsigned char *key_56,
 static void
 calc_resp(unsigned char *keys, unsigned char *plaintext, unsigned char *results)
 {
+#ifdef HAVE_NETTLE
+  struct des_ctx des;
+
+  setup_des_key(keys, &des);
+  nettle_des_encrypt(&des, 8, results, plaintext);
+
+  setup_des_key(keys + 7, &des);
+  nettle_des_encrypt(&des, 8, results + 8, plaintext);
+
+  setup_des_key(keys + 14, &des);
+  nettle_des_encrypt(&des, 8, results + 16, plaintext);
+#else
   DES_key_schedule ks;
 
   setup_des_key(keys, DESKEY(ks));
@@ -216,6 +225,7 @@ calc_resp(unsigned char *keys, unsigned char *plaintext, unsigned char *results)
   setup_des_key(keys+14, DESKEY(ks));
   DES_ecb_encrypt((DES_cblock*) plaintext, (DES_cblock*) (results+16),
                   DESKEY(ks), DES_ENCRYPT);
+#endif
 }
 
 /*
@@ -238,8 +248,7 @@ mkhash(const char *password,
   static const unsigned char magic[] = {
     0x4B, 0x47, 0x53, 0x21, 0x40, 0x23, 0x24, 0x25
   };
-  int i;
-  int len = strlen(password);
+  size_t i, len = strlen(password);
 
   /* make it fit at least 14 bytes */
   pw = (unsigned char *) alloca (len < 7 ? 14 : len * 2);
@@ -248,13 +257,22 @@ mkhash(const char *password,
     len = 14;
 
   for (i=0; i<len; i++)
-    pw[i] = c_toupper (password[i]);
+    pw[i] = (unsigned char) c_toupper (password[i]);
 
   for (; i<14; i++)
     pw[i] = 0;
 
   {
     /* create LanManager hashed password */
+#ifdef HAVE_NETTLE
+    struct des_ctx des;
+
+    setup_des_key(pw, &des);
+    nettle_des_encrypt(&des, 8, lmbuffer, magic);
+
+    setup_des_key(pw + 7, &des);
+    nettle_des_encrypt(&des, 8, lmbuffer + 8, magic);
+#else
     DES_key_schedule ks;
 
     setup_des_key(pw, DESKEY(ks));
@@ -264,6 +282,7 @@ mkhash(const char *password,
     setup_des_key(pw+7, DESKEY(ks));
     DES_ecb_encrypt((DES_cblock *)magic, (DES_cblock *)(lmbuffer+8),
                     DESKEY(ks), DES_ENCRYPT);
+#endif
 
     memset(lmbuffer+16, 0, 5);
   }
@@ -272,19 +291,29 @@ mkhash(const char *password,
 
 #ifdef USE_NTRESPONSES
   {
-    /* create NT hashed password */
+#ifdef HAVE_NETTLE
+    struct md4_ctx MD4;
+#else
     MD4_CTX MD4;
+#endif
 
     len = strlen(password);
 
     for (i=0; i<len; i++) {
-      pw[2*i]   = password[i];
+      pw[2*i]   = (unsigned char) password[i];
       pw[2*i+1] = 0;
     }
 
+#ifdef HAVE_NETTLE
+    nettle_md4_init(&MD4);
+    nettle_md4_update(&MD4, (unsigned) (2 * len), pw);
+    nettle_md4_digest(&MD4, MD4_DIGEST_SIZE, ntbuffer);
+#else
+    /* create NT hashed password */
     MD4_Init(&MD4);
     MD4_Update(&MD4, pw, 2*len);
     MD4_Final(ntbuffer, &MD4);
+#endif
 
     memset(ntbuffer+16, 0, 5);
   }
@@ -293,7 +322,7 @@ mkhash(const char *password,
 #endif
 }
 
-#define SHORTPAIR(x) ((x) & 0xff), ((x) >> 8)
+#define SHORTPAIR(x) (char) ((x) & 0xff), (char) ((x) >> 8)
 #define LONGQUARTET(x) ((x) & 0xff), (((x) >> 8)&0xff), \
   (((x) >>16)&0xff), ((x)>>24)
 
@@ -302,19 +331,19 @@ char *
 ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
              bool *ready)
 {
-  const char *domain=""; /* empty */
-  const char *host=""; /* empty */
-  int domlen=strlen(domain);
-  int hostlen = strlen(host);
-  int hostoff; /* host name offset */
-  int domoff;  /* domain name offset */
-  int size;
+  const char *domain = ""; /* empty */
+  const char *host = ""; /* empty */
+  size_t domlen = strlen(domain);
+  size_t hostlen = strlen(host);
+  size_t hostoff; /* host name offset */
+  size_t domoff;  /* domain name offset */
+  size_t size;
   char *base64;
   char ntlmbuf[256]; /* enough, unless the host/domain is very long */
 
   /* point to the address of the pointer that holds the string to sent to the
      server, which is for a plain host or for a HTTP proxy */
-  char *output;
+  char *output = NULL;
 
   *ready = false;
 
@@ -327,7 +356,8 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
 
   switch(ntlm->state) {
   case NTLMSTATE_TYPE1:
-  default: /* for the weird cases we (re)start here */
+  case NTLMSTATE_NONE:
+  case NTLMSTATE_LAST:
     hostoff = 32;
     domoff = hostoff + hostlen;
 
@@ -405,15 +435,15 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
     */
 
   {
-    int lmrespoff;
-    int ntrespoff;
-    int useroff;
+    size_t lmrespoff;
+    size_t ntrespoff;
+    size_t useroff;
     unsigned char lmresp[0x18]; /* fixed-size */
 #ifdef USE_NTRESPONSES
     unsigned char ntresp[0x18]; /* fixed-size */
 #endif
     const char *usr;
-    int userlen;
+    size_t userlen;
 
     DEBUGP (("Creating a type-3 NTLM message.\n"));
 
@@ -423,7 +453,7 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
 
     if (usr) {
       domain = user;
-      domlen = usr - domain;
+      domlen = (size_t) (usr - domain);
       usr++;
     }
     else
@@ -444,82 +474,82 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
 
     /* Create the big type-3 message binary blob */
 
-    size = snprintf (ntlmbuf, sizeof(ntlmbuf),
-                     "NTLMSSP%c"
-                     "\x03%c%c%c" /* type-3, 32 bits */
+    snprintf (ntlmbuf, sizeof (ntlmbuf),
+              "NTLMSSP%c"
+              "\x03%c%c%c" /* type-3, 32 bits */
 
-                     "%c%c%c%c" /* LanManager length + allocated space */
-                     "%c%c" /* LanManager offset */
-                     "%c%c" /* 2 zeroes */
+              "%c%c%c%c" /* LanManager length + allocated space */
+              "%c%c" /* LanManager offset */
+              "%c%c" /* 2 zeroes */
 
-                     "%c%c" /* NT-response length */
-                     "%c%c" /* NT-response allocated space */
-                     "%c%c" /* NT-response offset */
-                     "%c%c" /* 2 zeroes */
+              "%c%c" /* NT-response length */
+              "%c%c" /* NT-response allocated space */
+              "%c%c" /* NT-response offset */
+              "%c%c" /* 2 zeroes */
 
-                     "%c%c"  /* domain length */
-                     "%c%c"  /* domain allocated space */
-                     "%c%c"  /* domain name offset */
-                     "%c%c"  /* 2 zeroes */
+              "%c%c" /* domain length */
+              "%c%c" /* domain allocated space */
+              "%c%c" /* domain name offset */
+              "%c%c" /* 2 zeroes */
 
-                     "%c%c"  /* user length */
-                     "%c%c"  /* user allocated space */
-                     "%c%c"  /* user offset */
-                     "%c%c"  /* 2 zeroes */
+              "%c%c" /* user length */
+              "%c%c" /* user allocated space */
+              "%c%c" /* user offset */
+              "%c%c" /* 2 zeroes */
 
-                     "%c%c"  /* host length */
-                     "%c%c"  /* host allocated space */
-                     "%c%c"  /* host offset */
-                     "%c%c%c%c%c%c"  /* 6 zeroes */
+              "%c%c" /* host length */
+              "%c%c" /* host allocated space */
+              "%c%c" /* host offset */
+              "%c%c%c%c%c%c" /* 6 zeroes */
 
-                     "\xff\xff"  /* message length */
-                     "%c%c"  /* 2 zeroes */
+              "\xff\xff" /* message length */
+              "%c%c" /* 2 zeroes */
 
-                     "\x01\x82" /* flags */
-                     "%c%c"  /* 2 zeroes */
+              "\x01\x82" /* flags */
+              "%c%c" /* 2 zeroes */
 
-                     /* domain string */
-                     /* user string */
-                     /* host string */
-                     /* LanManager response */
-                     /* NT response */
-                     ,
-                     0, /* zero termination */
-                     0,0,0, /* type-3 long, the 24 upper bits */
+              /* domain string */
+              /* user string */
+              /* host string */
+              /* LanManager response */
+              /* NT response */
+              ,
+              0, /* zero termination */
+              0, 0, 0, /* type-3 long, the 24 upper bits */
 
-                     SHORTPAIR(0x18),  /* LanManager response length, twice */
-                     SHORTPAIR(0x18),
-                     SHORTPAIR(lmrespoff),
-                     0x0, 0x0,
+              SHORTPAIR (0x18), /* LanManager response length, twice */
+              SHORTPAIR (0x18),
+              SHORTPAIR (lmrespoff),
+              0x0, 0x0,
 
 #ifdef USE_NTRESPONSES
-                     SHORTPAIR(0x18),  /* NT-response length, twice */
-                     SHORTPAIR(0x18),
+              SHORTPAIR (0x18), /* NT-response length, twice */
+              SHORTPAIR (0x18),
 #else
-                     0x0, 0x0,
-                     0x0, 0x0,
+              0x0, 0x0,
+              0x0, 0x0,
 #endif
-                     SHORTPAIR(ntrespoff),
-                     0x0, 0x0,
+              SHORTPAIR (ntrespoff),
+              0x0, 0x0,
 
-                     SHORTPAIR(domlen),
-                     SHORTPAIR(domlen),
-                     SHORTPAIR(domoff),
-                     0x0, 0x0,
+              SHORTPAIR (domlen),
+              SHORTPAIR (domlen),
+              SHORTPAIR (domoff),
+              0x0, 0x0,
 
-                     SHORTPAIR(userlen),
-                     SHORTPAIR(userlen),
-                     SHORTPAIR(useroff),
-                     0x0, 0x0,
+              SHORTPAIR (userlen),
+              SHORTPAIR (userlen),
+              SHORTPAIR (useroff),
+              0x0, 0x0,
 
-                     SHORTPAIR(hostlen),
-                     SHORTPAIR(hostlen),
-                     SHORTPAIR(hostoff),
-                     0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+              SHORTPAIR (hostlen),
+              SHORTPAIR (hostlen),
+              SHORTPAIR (hostoff),
+              0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
 
-                     0x0, 0x0,
+              0x0, 0x0,
 
-                     0x0, 0x0);
+              0x0, 0x0);
 
     /* size is now 64 */
     size=64;
@@ -527,7 +557,7 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
 
     /* Make sure that the user and domain strings fit in the target buffer
        before we copy them there. */
-    if(((size_t) size + userlen + domlen) >= sizeof(ntlmbuf))
+    if((size + userlen + domlen) >= sizeof(ntlmbuf))
       return NULL;
 
     memcpy(&ntlmbuf[size], domain, domlen);
@@ -537,20 +567,20 @@ ntlm_output (struct ntlmdata *ntlm, const char *user, const char *passwd,
     size += userlen;
 
     /* we append the binary hashes to the end of the blob */
-    if(size < ((int)sizeof(ntlmbuf) - 0x18)) {
+    if(size < (sizeof(ntlmbuf) - 0x18)) {
       memcpy(&ntlmbuf[size], lmresp, 0x18);
       size += 0x18;
     }
 
 #ifdef USE_NTRESPONSES
-    if(size < ((int)sizeof(ntlmbuf) - 0x18)) {
+    if(size < (sizeof(ntlmbuf) - 0x18)) {
       memcpy(&ntlmbuf[size], ntresp, 0x18);
       size += 0x18;
     }
 #endif
 
-    ntlmbuf[56] = size & 0xff;
-    ntlmbuf[57] = size >> 8;
+    ntlmbuf[56] = (char) (size & 0xff);
+    ntlmbuf[57] = (char) (size >> 8);
 
     /* convert the binary blob into base64 */
     base64 = (char *) alloca (BASE64_LENGTH (size) + 1);

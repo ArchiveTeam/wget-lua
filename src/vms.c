@@ -45,7 +45,7 @@
  *
  *   Simplifies a fancy URL-derived file name into an ODS2- or
  *   ODS5-compatible file name.
- *    
+ *
  *----------------------------------------------------------------------
  *
  *       utime()
@@ -299,7 +299,7 @@ int dmy_lib$initialize = (int) lib$initialize;
 /*--------------------------------------------------------------------*/
 
 /* vms_arch()
-  
+
       Returns (run-time) VMS architecture string.
 */
 
@@ -556,12 +556,12 @@ char *vms_getpass( const char *prompt)
         fclose( sdc);
     }
     return ret;
-}    
+}
 
 /*--------------------------------------------------------------------*/
 
 /* vms_vers()
-  
+
       Returns (run-time) VMS version string.
 */
 
@@ -841,12 +841,11 @@ else
 
 /* Action routine for decc$to_vms(), in utime(). */
 
-char vms_path[ NAMX$C_MAXRSS+ 1];
+char *vms_path;
 
 int set_vms_name( char *name, int type)
 {
-   strncpy( vms_path, name, NAMX$C_MAXRSS);
-   vms_path[ NAMX$C_MAXRSS] = '\0';
+   vms_path = strdup(name);
    return 1;
 }
 
@@ -1337,7 +1336,7 @@ localtime_r (t, tp)
   return tp;
 }
 
-#endif	/* __CRTL_VER < 70000000 */
+#endif  /* __CRTL_VER < 70000000 */
 
 /*--------------------------------------------------------------------*/
 
@@ -1350,4 +1349,3 @@ const char *link_string = NULL;
 const char *version_string = VERSION;
 
 /*--------------------------------------------------------------------*/
-

@@ -5,6 +5,7 @@
 #include "url.h"
 #include "convert.h"
 #include "iri.h"
+#include "recur.h"
 #include "exits.h"
 
 #include <stdio.h>
@@ -162,7 +163,8 @@ luahooks_init ()
 
   lua_newtable (lua);
   LUA_PUSH_TO_TABLE (integer, "SUCCESS", WGET_EXIT_SUCCESS);
-  LUA_PUSH_TO_TABLE (integer, "MINIMUM", WGET_EXIT_MINIMUM);
+  LUA_PUSH_TO_TABLE (integer, "GENERIC_ERROR", WGET_EXIT_GENERIC_ERROR);
+  LUA_PUSH_TO_TABLE (integer, "PARSE_ERROR", WGET_EXIT_PARSE_ERROR);
   LUA_PUSH_TO_TABLE (integer, "IO_FAIL", WGET_EXIT_IO_FAIL);
   LUA_PUSH_TO_TABLE (integer, "NETWORK_FAIL", WGET_EXIT_NETWORK_FAIL);
   LUA_PUSH_TO_TABLE (integer, "SSL_AUTH_FAIL", WGET_EXIT_SSL_AUTH_FAIL);
@@ -213,19 +215,14 @@ uerr_to_string (const uerr_t v)
       CONST_CASE (CONSSLERR)
       CONST_CASE (CONIMPOSSIBLE)
       CONST_CASE (NEWLOCATION)
-      CONST_CASE (NOTENOUGHMEM)
-      CONST_CASE (CONPORTERR)
-      CONST_CASE (CONCLOSED)
       CONST_CASE (FTPOK)
       CONST_CASE (FTPLOGINC)
       CONST_CASE (FTPLOGREFUSED)
       CONST_CASE (FTPPORTERR)
       CONST_CASE (FTPSYSERR)
       CONST_CASE (FTPNSFOD)
-      CONST_CASE (FTPRETROK)
       CONST_CASE (FTPUNKNOWNTYPE)
       CONST_CASE (FTPRERR)
-      CONST_CASE (FTPREXC)
       CONST_CASE (FTPSRVERR)
       CONST_CASE (FTPRETRINT)
       CONST_CASE (FTPRESTFAIL)
@@ -233,28 +230,25 @@ uerr_to_string (const uerr_t v)
       CONST_CASE (FOPENERR)
       CONST_CASE (FOPEN_EXCL_ERR)
       CONST_CASE (FWRITEERR)
-      CONST_CASE (HOK)
-      CONST_CASE (HLEXC)
       CONST_CASE (HEOF)
+      CONST_CASE (GATEWAYTIMEOUT)
       CONST_CASE (HERR)
       CONST_CASE (RETROK)
       CONST_CASE (RECLEVELEXC)
-      CONST_CASE (FTPACCDENIED)
       CONST_CASE (WRONGCODE)
       CONST_CASE (FTPINVPASV)
       CONST_CASE (FTPNOPASV)
+      CONST_CASE (FTPNOPBSZ)
+      CONST_CASE (FTPNOPROT)
+      CONST_CASE (FTPNOAUTH)
       CONST_CASE (CONTNOTSUPPORTED)
       CONST_CASE (RETRUNNEEDED)
       CONST_CASE (RETRFINISHED)
       CONST_CASE (READERR)
       CONST_CASE (TRYLIMEXC)
-      CONST_CASE (URLBADPATTERN)
       CONST_CASE (FILEBADFILE)
       CONST_CASE (RANGEERR)
       CONST_CASE (RETRBADPATTERN)
-      CONST_CASE (RETNOTSUP)
-      CONST_CASE (ROBOTSOK)
-      CONST_CASE (NOROBOTS)
       CONST_CASE (PROXERR)
       CONST_CASE (AUTHFAILED)
       CONST_CASE (QUOTEXC)
@@ -264,9 +258,18 @@ uerr_to_string (const uerr_t v)
       CONST_CASE (UNLINKERR)
       CONST_CASE (NEWLOCATION_KEEP_POST)
       CONST_CASE (CLOSEFAILED)
+      CONST_CASE (ATTRMISSING)
+      CONST_CASE (UNKNOWNATTR)
       CONST_CASE (WARC_ERR)
       CONST_CASE (WARC_TMP_FOPENERR)
       CONST_CASE (WARC_TMP_FWRITEERR)
+      CONST_CASE (TIMECONV_ERR)
+      CONST_CASE (METALINK_PARSE_ERROR)
+      CONST_CASE (METALINK_RETR_ERROR)
+      CONST_CASE (METALINK_CHKSUM_ERROR)
+      CONST_CASE (METALINK_SIG_ERROR)
+      CONST_CASE (METALINK_MISSING_RESOURCE)
+      CONST_CASE (RETR_WITH_METALINK)
     }
   return NULL;
 }
@@ -287,21 +290,46 @@ url_scheme_to_string (const enum url_scheme v)
 }
 
 static char *
-download_child_p_reason_to_string (const download_child_p_reason_t v)
+reject_reason_to_string (const reject_reason v)
 {
   switch (v)
     {
-      case NO_REASON: return NULL;
-      CONST_CASE (ALREADY_ON_BLACKLIST)
-      CONST_CASE (NON_HTTP_SCHEME)
-      CONST_CASE (NOT_A_RELATIVE_LINK)
-      CONST_CASE (DOMAIN_NOT_ACCEPTED)
-      CONST_CASE (IN_PARENT_DIRECTORY)
-      CONST_CASE (DIRECTORY_EXCLUDED)
-      CONST_CASE (REGEX_EXCLUDED)
-      CONST_CASE (PATTERN_EXCLUDED)
-      CONST_CASE (DIFFERENT_HOST)
-      CONST_CASE (ROBOTS_TXT_FORBIDDEN)
+      CONST_CASE (WG_RR_SUCCESS)
+      CONST_CASE (WG_RR_BLACKLIST)
+      CONST_CASE (WG_RR_NOTHTTPS)
+      CONST_CASE (WG_RR_NONHTTP)
+      CONST_CASE (WG_RR_ABSOLUTE)
+      CONST_CASE (WG_RR_DOMAIN)
+      CONST_CASE (WG_RR_PARENT)
+      CONST_CASE (WG_RR_LIST)
+      CONST_CASE (WG_RR_REGEX)
+      CONST_CASE (WG_RR_RULES)
+      CONST_CASE (WG_RR_SPANNEDHOST)
+      CONST_CASE (WG_RR_ROBOTS)
+      CONST_CASE (WG_RR_LUAHOOK)
+    }
+  return NULL;
+}
+
+/* For backward compatibility. */
+static char *
+reject_reason_to_download_child_p_string (const reject_reason v)
+{
+  switch (v)
+    {
+      case WG_RR_SUCCESS:     return NULL;
+      case WG_RR_BLACKLIST:   return "ALREADY_ON_BLACKLIST";
+      case WG_RR_NOTHTTPS:    return "NOT_HTTPS_SCHEME";
+      case WG_RR_NONHTTP:     return "NON_HTTP_SCHEME";
+      case WG_RR_ABSOLUTE:    return "NOT_A_RELATIVE_LINK";
+      case WG_RR_DOMAIN:      return "DOMAIN_NOT_ACCEPTED";
+      case WG_RR_PARENT:      return "IN_PARENT_DIRECTORY";
+      case WG_RR_LIST:        return "DIRECTORY_EXCLUDED";
+      case WG_RR_REGEX:       return "REGEX_EXCLUDED";
+      case WG_RR_RULES:       return "PATTERN_EXCLUDED";
+      case WG_RR_SPANNEDHOST: return "DIFFERENT_HOST";
+      case WG_RR_ROBOTS:      return "ROBOTS_TXT_FORBIDDEN";
+      case WG_RR_LUAHOOK:     return "LUAHOOK";
     }
   return NULL;
 }
@@ -312,7 +340,8 @@ exit_status_to_string (const int v)
   switch (v)
     {
       case WGET_EXIT_SUCCESS: return "SUCCESS";
-      /* Equal to IO_FAIL:  case WGET_EXIT_MINIMUM: return "MINIMUM"; */
+      case WGET_EXIT_GENERIC_ERROR: return "GENERIC_ERROR";
+      case WGET_EXIT_PARSE_ERROR: return "PARSE_ERROR";
       case WGET_EXIT_IO_FAIL: return "IO_FAIL";
       case WGET_EXIT_NETWORK_FAIL: return "NETWORK_FAIL";
       case WGET_EXIT_SSL_AUTH_FAIL: return "SSL_AUTH_FAIL";
@@ -496,11 +525,21 @@ luahooks_httploop_result (const struct url *url, const uerr_t err, const struct 
 }
 
 bool
-luahooks_download_child_p (const struct urlpos *upos, struct url *parent, int depth,
-                           struct url *start_url_parsed, struct iri *iri,
-                           bool verdict, download_child_p_reason_t reason)
+luahooks_download_child (const struct urlpos *upos, struct url *parent, int depth,
+                         struct url *start_url_parsed, struct iri *iri,
+                         reject_reason reason)
 {
-  if (lua == NULL || !luahooks_function_lookup ("callbacks", "download_child_p"))
+  bool verdict = (reason == WG_RR_SUCCESS);
+  const char *reason_string;
+  if (lua == NULL)
+    return verdict;
+  else if (luahooks_function_lookup ("callbacks", "download_child"))
+    /* New function. */
+    reason_string = reject_reason_to_string (reason);
+  else if (luahooks_function_lookup ("callbacks", "download_child_p"))
+    /* Old function, map to old string. */
+    reason_string = reject_reason_to_download_child_p_string (reason);
+  else
     return verdict;
 
   urlpos_to_lua_table (upos);
@@ -509,7 +548,7 @@ luahooks_download_child_p (const struct urlpos *upos, struct url *parent, int de
   url_to_lua_table (start_url_parsed);
   iri_to_lua_table (iri);
   lua_pushboolean (lua, verdict);
-  lua_pushstring (lua, download_child_p_reason_to_string (reason));
+  lua_pushstring (lua, reason_string);
 
   int res = lua_pcall (lua, 7, 1, 0);
   if (res != 0)

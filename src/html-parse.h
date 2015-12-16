@@ -1,6 +1,6 @@
 /* Declarations for html-parse.c.
    Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Free Software Foundation, Inc.
+   2007, 2008, 2009, 2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -32,8 +32,8 @@ as that of the covered work.  */
 #define HTML_PARSE_H
 
 struct attr_pair {
-  char *name;			/* attribute name */
-  char *value;			/* attribute value */
+  char *name;           /* attribute name */
+  char *value;          /* attribute value */
 
   /* Needed for URL conversion; the places where the value begins and
      ends, including the quotes and everything. */
@@ -45,19 +45,19 @@ struct attr_pair {
 };
 
 struct taginfo {
-  char *name;			/* tag name */
-  int end_tag_p;		/* whether this is an end-tag */
-  int nattrs;			/* number of attributes */
-  struct attr_pair *attrs;	/* attributes */
+  char *name;                   /* tag name */
+  int end_tag_p;                /* whether this is an end-tag */
+  int nattrs;                   /* number of attributes */
+  struct attr_pair *attrs;      /* attributes */
 
-  const char *start_position;	/* start position of tag */
-  const char *end_position;	/* end position of tag */
+  const char *start_position;   /* start position of tag */
+  const char *end_position;     /* end position of tag */
 
   const char *contents_begin;   /* delimiters of tag contents */
   const char *contents_end;     /* only valid if end_tag_p */
 };
 
-struct hash_table;		/* forward declaration */
+struct hash_table;              /* forward declaration */
 
 /* Flags for map_html_tags: */
 #define MHT_STRICT_COMMENTS  1  /* use strict comment interpretation */
@@ -65,7 +65,7 @@ struct hash_table;		/* forward declaration */
                                    <a href=" foo "> as "foo" */
 
 void map_html_tags (const char *, int,
-		    void (*) (struct taginfo *, void *), void *, int,
-		    const struct hash_table *, const struct hash_table *);
+                    void (*) (struct taginfo *, void *), void *, int,
+                    const struct hash_table *, const struct hash_table *);
 
 #endif /* HTML_PARSE_H */

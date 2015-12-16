@@ -1,7 +1,7 @@
 /* mswindows.c -- Windows-specific support
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2014, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -42,6 +42,7 @@ as that of the covered work.  */
 
 #include "utils.h"
 #include "url.h"
+#include "exits.h"
 
 #ifndef ES_SYSTEM_REQUIRED
 #define ES_SYSTEM_REQUIRED  0x00000001
@@ -84,11 +85,11 @@ windows_main (char **exec_name)
   if (p)
     *p = '\0';
 }
-
+
 static void
 ws_cleanup (void)
 {
-  xfree ((char*)exec_name);
+  xfree (exec_name);
   WSACleanup ();
 }
 
@@ -164,8 +165,8 @@ fake_fork_child (void)
       if (new_log_fp)
         {
           info->logfile_changed = true;
-          strncpy (info->lfilename, opt.lfilename, sizeof (info->lfilename));
-          info->lfilename[sizeof (info->lfilename) - 1] = '\0';
+          snprintf (info->lfilename, sizeof (info->lfilename), "%s",
+                    opt.lfilename);
           fclose (new_log_fp);
         }
     }
@@ -308,7 +309,7 @@ cleanup:
 
   /* We're the parent.  If all is well, terminate.  */
   if (rv)
-    exit (0);
+    exit (WGET_EXIT_SUCCESS);
 
   /* We failed, return.  */
 }
@@ -366,8 +367,8 @@ static int old_percentage = -1;
 void
 ws_changetitle (const char *url)
 {
-  xfree_null (title_buf);
-  xfree_null (curr_url);
+  xfree (title_buf);
+  xfree (curr_url);
   title_buf = xmalloc (strlen (url) + 20);
   curr_url = xstrdup (url);
   old_percentage = -1;
@@ -461,7 +462,7 @@ ws_startup (void)
     {
       fprintf (stderr, _("%s: Couldn't find usable socket driver.\n"),
                exec_name);
-      exit (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
 
   if (data.wVersion < requested)
@@ -469,14 +470,14 @@ ws_startup (void)
       fprintf (stderr, _("%s: Couldn't find usable socket driver.\n"),
                exec_name);
       WSACleanup ();
-      exit (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
 
   atexit (ws_cleanup);
   set_sleep_mode ();
   SetConsoleCtrlHandler (ws_handler, TRUE);
 }
-
+
 /* run_with_timeout Windows implementation.  */
 
 /* Stack size 0 uses default thread stack-size (reserve+commit).
@@ -620,35 +621,35 @@ inet_ntop (int af, const void *src, char *dst, socklen_t cnt)
 void
 set_windows_fd_as_blocking_socket (int fd)
 {
-	/* 04/2011
+    /* 04/2011
      gnulib select() converts blocking sockets to nonblocking in windows
      discussed here:
      http://old.nabble.com/blocking-socket-is-nonblocking-after-calling-gnulib-
      select%28%29-in-windows-td31432857.html
 
      wget uses blocking sockets so we must convert them back to blocking.
-	*/
-	int ret = 0;
-	int wsagle = 0;
-	const int zero = 0;
+    */
+    int ret = 0;
+    int wsagle = 0;
+    const int zero = 0;
 
-	do
-	{
-		if(wsagle == WSAEINPROGRESS)
-		  Sleep(1);  /* use windows sleep */
-		
-		WSASetLastError (0);
-		ret = ioctl (fd, FIONBIO, &zero);
-		wsagle = WSAGetLastError();
-	}
+    do
+    {
+        if(wsagle == WSAEINPROGRESS)
+          Sleep(1);  /* use windows sleep */
+
+        WSASetLastError (0);
+        ret = ioctl (fd, FIONBIO, &zero);
+        wsagle = WSAGetLastError ();
+    }
   while (ret && (wsagle == WSAEINPROGRESS));
 
-	if(ret)
+  if(ret)
     {
       fprintf (stderr,
                _("ioctl() failed.  The socket could not be set as blocking.\n") );
       DEBUGP (("Winsock error: %d\n", WSAGetLastError ()));
       abort ();
     }
-	return;
+  return;
 }

@@ -1,6 +1,6 @@
 /* Download progress.
    Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010, 2011 Free Software Foundation, Inc.
+   2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -35,7 +35,7 @@ bool valid_progress_implementation_p (const char *);
 void set_progress_implementation (const char *);
 void progress_schedule_redirect (void);
 
-void *progress_create (wgint, wgint);
+void *progress_create (const char *, wgint, wgint);
 bool progress_interactive_p (void *);
 void progress_update (void *, wgint, double);
 void progress_finish (void *, double);

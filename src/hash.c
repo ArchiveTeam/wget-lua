@@ -1,6 +1,6 @@
 /* Hash tables.
    Copyright (C) 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
-   2009, 2010, 2011 Free Software Foundation, Inc.
+   2009, 2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -46,20 +46,17 @@ as that of the covered work.  */
 # include "utils.h"
 #else
 /* Make do without them. */
-# define xnew(x) xmalloc (sizeof (x))
-# define xnew_array(type, x) xmalloc (sizeof (type) * (x))
-# define xmalloc malloc
-# define xfree free
+# define xnew(type) (xmalloc (sizeof (type)))
+# define xnew0(type) (xcalloc (1, sizeof (type)))
+# define xnew_array(type, len) (xmalloc ((len) * sizeof (type)))
+# define xfree(p) do { free ((void *) (p)); p = NULL; } while (0)
+
 # ifndef countof
 #  define countof(x) (sizeof (x) / sizeof ((x)[0]))
 # endif
 # include <ctype.h>
 # define c_tolower(x) tolower ((unsigned char) (x))
-# ifdef HAVE_STDINT_H
-#  include <stdint.h>
-# else
-   typedef unsigned long uintptr_t;
-# endif
+# include <stdint.h>
 #endif
 
 #include "hash.h"
@@ -589,7 +586,7 @@ hash_table_count (const struct hash_table *ht)
 {
   return ht->count;
 }
-
+
 /* Functions from this point onward are meant for convenience and
    don't strictly belong to this file.  However, this is as good a
    place for them as any.  */
@@ -744,7 +741,7 @@ cmp_pointer (const void *ptr1, const void *ptr2)
 {
   return ptr1 == ptr2;
 }
-
+
 #ifdef TEST
 
 #include <stdio.h>
@@ -767,6 +764,15 @@ main (void)
 {
   struct hash_table *ht = make_string_hash_table (0);
   char line[80];
+
+#ifdef ENABLE_NLS
+  /* Set the current locale.  */
+  setlocale (LC_ALL, "");
+  /* Set the text message domain.  */
+  bindtextdomain ("wget", LOCALEDIR);
+  textdomain ("wget");
+#endif /* ENABLE_NLS */
+
   while ((fgets (line, sizeof (line), stdin)))
     {
       int len = strlen (line);

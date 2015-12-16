@@ -56,8 +56,7 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-c-partial",
-                              input => \%urls,
+my $the_test = HTTPTest->new (input => \%urls,
                               cmdline => $cmdline,
                               errcode => $expected_error_code,
                               existing => \%existing_files,
@@ -65,4 +64,3 @@ my $the_test = HTTPTest->new (name => "Test-c-partial",
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

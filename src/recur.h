@@ -1,7 +1,7 @@
 /* Declarations for recur.c.
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -49,17 +49,10 @@ uerr_t retrieve_tree (struct url *, struct iri *);
 
 typedef enum
 {
-  NO_REASON,
-  ALREADY_ON_BLACKLIST,
-  NON_HTTP_SCHEME,
-  NOT_A_RELATIVE_LINK,
-  DOMAIN_NOT_ACCEPTED,
-  IN_PARENT_DIRECTORY,
-  DIRECTORY_EXCLUDED,
-  REGEX_EXCLUDED,
-  PATTERN_EXCLUDED,
-  DIFFERENT_HOST,
-  ROBOTS_TXT_FORBIDDEN
-} download_child_p_reason_t;
+  WG_RR_SUCCESS, WG_RR_BLACKLIST, WG_RR_NOTHTTPS, WG_RR_NONHTTP, WG_RR_ABSOLUTE,
+  WG_RR_DOMAIN, WG_RR_PARENT, WG_RR_LIST, WG_RR_REGEX, WG_RR_RULES,
+  WG_RR_SPANNEDHOST, WG_RR_ROBOTS, WG_RR_LUAHOOK
+} reject_reason;
+
 
 #endif /* RECUR_H */

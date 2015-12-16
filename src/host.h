@@ -1,7 +1,7 @@
 /* Declarations for host.c
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -58,9 +58,9 @@ typedef struct {
 
   /* The actual data, in the form of struct in_addr or in6_addr: */
   union {
-    struct in_addr d4;		/* IPv4 address */
+    struct in_addr d4;      /* IPv4 address */
 #ifdef ENABLE_IPV6
-    struct in6_addr d6;		/* IPv6 address */
+    struct in6_addr d6;     /* IPv6 address */
 #endif
   } data;
 

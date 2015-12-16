@@ -1,7 +1,7 @@
 /* Declarations for retr.c.
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -34,6 +34,8 @@ as that of the covered work.  */
 
 #include "url.h"
 
+extern int numurls;
+
 /* These global vars should be made static to retr.c and exported via
    functions! */
 extern SUM_SIZE_INT total_downloaded_bytes;
@@ -50,7 +52,7 @@ enum {
   rb_chunked_transfer_encoding = 4
 };
 
-int fd_read_body (int, FILE *, wgint, wgint, wgint *, wgint *, double *, int, FILE *);
+int fd_read_body (const char *, int, FILE *, wgint, wgint, wgint *, wgint *, double *, int, FILE *);
 
 typedef const char *(*hunk_terminator_t) (const char *, const char *, int);
 
@@ -75,8 +77,8 @@ void set_local_file (const char **, const char *);
 
 bool input_file_url (const char *);
 
-#define SUSPEND_BODY_DATA do {                  \
-  body_data_suspended = true;                   \
+#define SUSPEND_METHOD do {                     \
+  method_suspended = true;                      \
   saved_body_data = opt.body_data;              \
   saved_body_file_name = opt.body_file;         \
   saved_method = opt.method;                    \
@@ -85,13 +87,13 @@ bool input_file_url (const char *);
   opt.method = NULL;                            \
 } while (0)
 
-#define RESTORE_BODY_DATA do {                          \
-  if (body_data_suspended)                              \
+#define RESTORE_METHOD do {                             \
+  if (method_suspended)                                 \
     {                                                   \
       opt.body_data = saved_body_data;                  \
       opt.body_file = saved_body_file_name;             \
-      opt.method = saved_method;                       \
-      body_data_suspended = false;                      \
+      opt.method = saved_method;                        \
+      method_suspended = false;                         \
     }                                                   \
 } while (0)
 

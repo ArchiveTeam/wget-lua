@@ -8,15 +8,14 @@ use HTTPTest;
 
 ###############################################################################
 
-my $cmdline = $WgetTest::WGETPATH . " -d --post-file=nofile http://localhost:{{port}}/";
+my $cmdline = $WgetTest::WGETPATH . " --post-file=nofile http://localhost:{{port}}/";
 
 my $expected_error_code = 3;
 
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-missing-file",
-                              cmdline => $cmdline,
+my $the_test = HTTPTest->new (cmdline => $cmdline,
                               errcode => $expected_error_code);
 exit $the_test->run();
 

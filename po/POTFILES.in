@@ -8,6 +8,7 @@ lib/error.c
 lib/gai_strerror.c
 lib/getopt.c
 lib/quotearg.c
+lib/regcomp.c
 lib/spawn-pipe.c
 lib/w32spawn.h
 lib/wait-process.c
@@ -25,6 +26,7 @@ src/init.c
 src/iri.c
 src/log.c
 src/main.c
+src/metalink.c
 src/mswindows.c
 src/netrc.c
 src/openssl.c
