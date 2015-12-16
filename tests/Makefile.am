@@ -1,6 +1,6 @@
 # Makefile for `wget' utility
 # Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-# 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software
+# 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
 # Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
@@ -27,20 +27,11 @@
 # shall include the source code for the parts of OpenSSL used as well
 # as that of the covered work.
 
+# see http://www.gnu.org/software/automake/manual/html_node/Parallel-Test-Harness.html#Parallel-Test-Harness
+
 #
 # Version: @VERSION@
 #
-
-PERL     = perl
-PERLRUN = $(PERL) -I$(srcdir)
-
-LIBS     = @LIBICONV@ @LIBINTL@ @LIBS@ $(LIB_CLOCK_GETTIME)
-
-.PHONY: test run-unit-tests run-px-tests
-
-check-local: test
-
-test: ../src/wget$(EXEEXT) run-unit-tests run-px-tests
 
 ../src/wget$(EXEEXT):
 	cd ../src && $(MAKE) $(AM_MAKEFLAGS)
@@ -53,14 +44,7 @@ test: ../src/wget$(EXEEXT) run-unit-tests run-px-tests
 ../lib/libgnu.a:
 	cd ../lib && $(MAKE) $(AM_MAKEFLAGS)
 
-run-unit-tests: unit-tests$(EXEEXT) ../src/libunittest.a
-	./unit-tests$(EXEEXT)
-
-run-px-tests: WgetTest.pm ../src/wget$(EXEEXT)
-	$(srcdir)/run-px $(top_srcdir)
-
-EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
-             WgetFeature.pm WgetFeature.cfg \
+PX_TESTS = \
              Test-auth-basic.px \
              Test-auth-no-challenge.px \
              Test-auth-no-challenge-url.px \
@@ -82,6 +66,13 @@ EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
              Test-ftp-iri-fallback.px \
              Test-ftp-iri-recursive.px \
              Test-ftp-iri-disabled.px \
+             Test-ftp-list-Multinet.px \
+             Test-ftp-list-Unknown.px \
+             Test-ftp-list-Unknown-a.px \
+             Test-ftp-list-Unknown-hidden.px \
+             Test-ftp-list-Unknown-list-a-fails.px \
+             Test-ftp-list-UNIX-hidden.px \
+             Test-ftp--start-pos.px \
              Test-HTTP-Content-Disposition-1.px \
              Test-HTTP-Content-Disposition-2.px \
              Test-HTTP-Content-Disposition.px \
@@ -121,6 +112,7 @@ EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
              Test-O.px \
              Test--post-file.px \
              Test-proxied-https-auth.px \
+             Test-proxied-https-auth-keepalive.px \
              Test-proxy-auth-basic.px \
              Test-restrict-ascii.px \
              Test-Restrict-Lowercase.px \
@@ -132,10 +124,25 @@ EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
              Test--spider-r--no-content-disposition.px \
              Test--spider-r--no-content-disposition-trivial.px \
              Test--spider-r.px \
-             run-px certs
+             Test--start-pos.px \
+             Test--start-pos--continue.px \
+             Test--httpsonly-r.px \
+             Test-204.px \
+             Test-ftp-pasv-not-supported.px
+
+EXTRA_DIST = FTPServer.pm FTPTest.pm HTTPServer.pm HTTPTest.pm \
+             WgetTests.pm WgetFeature.pm WgetFeature.cfg $(PX_TESTS) \
+             certs valgrind-suppressions valgrind-suppressions-ssl
 
 check_PROGRAMS = unit-tests
 unit_tests_SOURCES =
-LDADD = ../src/libunittest.a ../lib/libgnu.a $(LIBS)
+LDADD = ../src/libunittest.a ../lib/libgnu.a @LIBICONV@ @LIBINTL@ $(LIBS) $(LIB_CLOCK_GETTIME)
 
 CLEANFILES = *~ *.bak core core.[0-9]*
+
+TESTS = ./unit-tests$(EXEEXT) $(PX_TESTS)
+TEST_EXTENSIONS = .px
+PX_LOG_COMPILER = $(PERL)
+AM_PX_LOG_FLAGS = -I$(srcdir)
+AM_TESTS_ENVIRONMENT = export WGETRC=/dev/null; export SYSTEM_WGETRC=/dev/null;\
+ export VALGRIND_TESTS="@VALGRIND_TESTS@";

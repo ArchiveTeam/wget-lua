@@ -41,7 +41,7 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = FTPTest->new (name => "Test-ftp-iri-disabled",
+my $the_test = FTPTest->new (
                              input => \%urls,
                              cmdline => $cmdline,
                              errcode => $expected_error_code,
@@ -49,4 +49,3 @@ my $the_test = FTPTest->new (name => "Test-ftp-iri-disabled",
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

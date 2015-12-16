@@ -69,7 +69,7 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = FTPTest->new (name => "Test-i-ftp",
+my $the_test = FTPTest->new (
                              input => \%urls,
                              cmdline => $cmdline,
                              errcode => $expected_error_code,
@@ -77,4 +77,3 @@ my $the_test = FTPTest->new (name => "Test-i-ftp",
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

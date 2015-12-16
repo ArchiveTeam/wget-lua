@@ -1,7 +1,7 @@
 /* URL handling.
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -41,6 +41,7 @@ as that of the covered work.  */
 #include "utils.h"
 #include "url.h"
 #include "host.h"  /* for is_valid_ipv6_address */
+#include "c-strcase.h"
 
 #ifdef __VMS
 #include "vms.h"
@@ -77,6 +78,13 @@ static struct scheme_data supported_schemes[] =
   { "https",    "https://", DEFAULT_HTTPS_PORT, scm_has_query|scm_has_fragment },
 #endif
   { "ftp",      "ftp://",   DEFAULT_FTP_PORT,   scm_has_params|scm_has_fragment },
+#ifdef HAVE_SSL
+  /*
+   * Explicit FTPS uses the same port as FTP.
+   * Implicit FTPS has its own port (990), but it is disabled by default.
+   */
+  { "ftps",     "ftps://",  DEFAULT_FTP_PORT,  scm_has_params|scm_has_fragment },
+#endif
 
   /* SCHEME_INVALID */
   { NULL,       NULL,       -1,                 0 }
@@ -85,7 +93,7 @@ static struct scheme_data supported_schemes[] =
 /* Forward declarations: */
 
 static bool path_simplify (enum url_scheme, char *);
-
+
 /* Support for escaping and unescaping of URL strings.  */
 
 /* Table of "reserved" and "unsafe" characters.  Those terms are
@@ -160,17 +168,8 @@ static const unsigned char urlchr_table[256] =
 #undef U
 #undef RU
 
-/* URL-unescape the string S.
-
-   This is done by transforming the sequences "%HH" to the character
-   represented by the hexadecimal digits HH.  If % is not followed by
-   two hexadecimal digits, it is inserted literally.
-
-   The transformation is done in place.  If you need the original
-   string intact, make a copy before calling this function.  */
-
 static void
-url_unescape (char *s)
+url_unescape_1 (char *s, unsigned char mask)
 {
   char *t = s;                  /* t - tortoise */
   char *h = s;                  /* h - hare     */
@@ -189,6 +188,8 @@ url_unescape (char *s)
           if (!h[1] || !h[2] || !(c_isxdigit (h[1]) && c_isxdigit (h[2])))
             goto copychar;
           c = X2DIGITS_TO_NUM (h[1], h[2]);
+          if (urlchr_test(c, mask))
+            goto copychar;
           /* Don't unescape %00 because there is no way to insert it
              into a C string without effectively truncating it. */
           if (c == '\0')
@@ -198,6 +199,31 @@ url_unescape (char *s)
         }
     }
   *t = '\0';
+}
+
+/* URL-unescape the string S.
+
+   This is done by transforming the sequences "%HH" to the character
+   represented by the hexadecimal digits HH.  If % is not followed by
+   two hexadecimal digits, it is inserted literally.
+
+   The transformation is done in place.  If you need the original
+   string intact, make a copy before calling this function.  */
+void
+url_unescape (char *s)
+{
+  url_unescape_1 (s, 0);
+}
+
+/* URL-unescape the string S.
+
+   This functions behaves identically as url_unescape(), but does not
+   convert characters from "reserved". In other words, it only converts
+   "unsafe" characters.  */
+void
+url_unescape_except_reserved (char *s)
+{
+  url_unescape_1 (s, urlchr_reserved);
 }
 
 /* The core of url_escape_* functions.  Escapes the characters that
@@ -272,7 +298,7 @@ url_escape_allow_passthrough (const char *s)
 {
   return url_escape_1 (s, urlchr_unsafe, true);
 }
-
+
 /* Decide whether the char at position P needs to be encoded.  (It is
    not enough to pass a single char *P because the function may need
    to inspect the surrounding context.)
@@ -418,7 +444,7 @@ reencode_escapes (const char *s)
   assert (p2 - newstr == newlen);
   return newstr;
 }
-
+
 /* Returns the scheme type if the scheme is supported, or
    SCHEME_INVALID if not.  */
 
@@ -574,8 +600,8 @@ rewrite_shorthand_url (const char *url)
         goto http;
 
       /* Turn "foo.bar.com:path" to "ftp://foo.bar.com/path". */
-      ret = aprintf ("ftp://%s", url);
-      ret[6 + (p - url)] = '/';
+      if ((ret = aprintf ("ftp://%s", url)) != NULL)
+        ret[6 + (p - url)] = '/';
     }
   else
     {
@@ -585,7 +611,7 @@ rewrite_shorthand_url (const char *url)
     }
   return ret;
 }
-
+
 static void split_path (const char *, char **, char **);
 
 /* Like strpbrk, with the exception that it returns the pointer to the
@@ -681,7 +707,6 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
   char *user = NULL, *passwd = NULL;
 
   const char *url_encoded = NULL;
-  char *new_url = NULL;
 
   int error_code;
 
@@ -695,26 +720,30 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
       goto error;
     }
 
+  url_encoded = url;
+
   if (iri && iri->utf8_encode)
     {
-      iri->utf8_encode = remote_to_utf8 (iri, iri->orig_url ? iri->orig_url : url, (const char **) &new_url);
+      char *new_url = NULL;
+
+      iri->utf8_encode = remote_to_utf8 (iri, iri->orig_url ? iri->orig_url : url, &new_url);
       if (!iri->utf8_encode)
         new_url = NULL;
       else
-        iri->orig_url = xstrdup (url);
+        {
+          xfree (iri->orig_url);
+          iri->orig_url = xstrdup (url);
+          url_encoded = reencode_escapes (new_url);
+          if (url_encoded != new_url)
+            xfree (new_url);
+          percent_encode = false;
+        }
     }
 
-  /* XXX XXX Could that change introduce (security) bugs ???  XXX XXX*/
   if (percent_encode)
-    url_encoded = reencode_escapes (new_url ? new_url : url);
-  else
-    url_encoded = new_url ? new_url : url;
+    url_encoded = reencode_escapes (url);
 
   p = url_encoded;
-
-  if (new_url && url_encoded != new_url)
-    xfree (new_url);
-
   p += strlen (supported_schemes[scheme].leading_string);
   uname_b = p;
   p = url_skip_credentials (p);
@@ -893,6 +922,7 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
             {
               xfree (u->host);
               u->host = new;
+              u->idn_allocated = true;
               host_modified = true;
             }
         }
@@ -913,7 +943,7 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
       u->url = url_string (u, URL_AUTH_SHOW);
 
       if (url_encoded != url)
-        xfree ((char *) url_encoded);
+        xfree (url_encoded);
     }
   else
     {
@@ -928,7 +958,7 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
  error:
   /* Cleanup in case of error: */
   if (url_encoded && url_encoded != url)
-    xfree ((char *) url_encoded);
+    xfree (url_encoded);
 
   /* Transmit the error code to the caller, if the caller wants to
      know.  */
@@ -953,7 +983,7 @@ url_error (const char *url, int error_code)
 
       if ((p = strchr (scheme, ':')))
         *p = '\0';
-      if (!strcasecmp (scheme, "https"))
+      if (!c_strcasecmp (scheme, "https"))
         error = aprintf (_("HTTPS support not compiled in"));
       else
         error = aprintf (_(parse_errors[error_code]), quote (scheme));
@@ -1169,22 +1199,31 @@ url_set_file (struct url *url, const char *newfile)
 void
 url_free (struct url *url)
 {
-  xfree (url->host);
-  xfree (url->path);
-  xfree (url->url);
+  if (url)
+    {
+      if (url->idn_allocated) {
+        idn_free (url->host);      /* A dummy if !defined(ENABLE_IRI) */
+        url->host = NULL;
+      }
+      else
+        xfree (url->host);
 
-  xfree_null (url->params);
-  xfree_null (url->query);
-  xfree_null (url->fragment);
-  xfree_null (url->user);
-  xfree_null (url->passwd);
+      xfree (url->path);
+      xfree (url->url);
 
-  xfree (url->dir);
-  xfree (url->file);
+      xfree (url->params);
+      xfree (url->query);
+      xfree (url->fragment);
+      xfree (url->user);
+      xfree (url->passwd);
 
-  xfree (url);
+      xfree (url->dir);
+      xfree (url->file);
+
+      xfree (url);
+    }
 }
-
+
 /* Create all the necessary directories for PATH (a file).  Calls
    make_directory internally.  */
 int
@@ -1236,7 +1275,7 @@ mkalldirs (const char *path)
   xfree (t);
   return res;
 }
-
+
 /* Functions for constructing the file name out of URL components.  */
 
 /* A growable string structure, used by url_file_name and friends.
@@ -1281,16 +1320,6 @@ append_null (struct growable *dest)
   *TAIL (dest) = 0;
 }
 
-/* Shorten DEST to LENGTH. */
-static void
-shorten_length (size_t length, struct growable *dest)
-{
-  if (length < dest->tail)
-    dest->tail = length;
-
-  append_null (dest);
-}
-
 /* Append CH to DEST. */
 static void
 append_char (char ch, struct growable *dest)
@@ -1324,8 +1353,9 @@ append_string (const char *str, struct growable *dest)
 
 enum {
   filechr_not_unix    = 1,      /* unusable on Unix, / and \0 */
-  filechr_not_windows = 2,      /* unusable on Windows, one of \|/<>?:*" */
-  filechr_control     = 4       /* a control character, e.g. 0-31 */
+  filechr_not_vms     = 2,      /* unusable on VMS (ODS5), 0x00-0x1F * ? */
+  filechr_not_windows = 4,      /* unusable on Windows, one of \|/<>?:*" */
+  filechr_control     = 8       /* a control character, e.g. 0-31 */
 };
 
 #define FILE_CHAR_TEST(c, mask) \
@@ -1334,11 +1364,14 @@ enum {
 
 /* Shorthands for the table: */
 #define U filechr_not_unix
+#define V filechr_not_vms
 #define W filechr_not_windows
 #define C filechr_control
 
+#define UVWC U|V|W|C
 #define UW U|W
-#define UWC U|W|C
+#define VC V|C
+#define VW V|W
 
 /* Table of characters unsafe under various conditions (see above).
 
@@ -1349,22 +1382,22 @@ enum {
 
 static const unsigned char filechr_table[256] =
 {
-UWC,  C,  C,  C,   C,  C,  C,  C,   /* NUL SOH STX ETX  EOT ENQ ACK BEL */
-  C,  C,  C,  C,   C,  C,  C,  C,   /* BS  HT  LF  VT   FF  CR  SO  SI  */
-  C,  C,  C,  C,   C,  C,  C,  C,   /* DLE DC1 DC2 DC3  DC4 NAK SYN ETB */
-  C,  C,  C,  C,   C,  C,  C,  C,   /* CAN EM  SUB ESC  FS  GS  RS  US  */
-  0,  0,  W,  0,   0,  0,  0,  0,   /* SP  !   "   #    $   %   &   '   */
-  0,  0,  W,  0,   0,  0,  0, UW,   /* (   )   *   +    ,   -   .   /   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* 0   1   2   3    4   5   6   7   */
-  0,  0,  W,  0,   W,  0,  W,  W,   /* 8   9   :   ;    <   =   >   ?   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* @   A   B   C    D   E   F   G   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* H   I   J   K    L   M   N   O   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* P   Q   R   S    T   U   V   W   */
-  0,  0,  0,  0,   W,  0,  0,  0,   /* X   Y   Z   [    \   ]   ^   _   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* `   a   b   c    d   e   f   g   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* h   i   j   k    l   m   n   o   */
-  0,  0,  0,  0,   0,  0,  0,  0,   /* p   q   r   s    t   u   v   w   */
-  0,  0,  0,  0,   W,  0,  0,  C,   /* x   y   z   {    |   }   ~   DEL */
+UVWC, VC, VC, VC,  VC, VC, VC, VC,   /* NUL SOH STX ETX  EOT ENQ ACK BEL */
+  VC, VC, VC, VC,  VC, VC, VC, VC,   /* BS  HT  LF  VT   FF  CR  SO  SI  */
+  VC, VC, VC, VC,  VC, VC, VC, VC,   /* DLE DC1 DC2 DC3  DC4 NAK SYN ETB */
+  VC, VC, VC, VC,  VC, VC, VC, VC,   /* CAN EM  SUB ESC  FS  GS  RS  US  */
+   0,  0,  W,  0,   0,  0,  0,  0,   /* SP  !   "   #    $   %   &   '   */
+   0,  0, VW,  0,   0,  0,  0, UW,   /* (   )   *   +    ,   -   .   /   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* 0   1   2   3    4   5   6   7   */
+   0,  0,  W,  0,   W,  0,  W, VW,   /* 8   9   :   ;    <   =   >   ?   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* @   A   B   C    D   E   F   G   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* H   I   J   K    L   M   N   O   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* P   Q   R   S    T   U   V   W   */
+   0,  0,  0,  0,   W,  0,  0,  0,   /* X   Y   Z   [    \   ]   ^   _   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* `   a   b   c    d   e   f   g   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* h   i   j   k    l   m   n   o   */
+   0,  0,  0,  0,   0,  0,  0,  0,   /* p   q   r   s    t   u   v   w   */
+   0,  0,  0,  0,   W,  0,  0,  C,   /* x   y   z   {    |   }   ~   DEL */
 
   C, C, C, C,  C, C, C, C,  C, C, C, C,  C, C, C, C, /* 128-143 */
   C, C, C, C,  C, C, C, C,  C, C, C, C,  C, C, C, C, /* 144-159 */
@@ -1377,10 +1410,13 @@ UWC,  C,  C,  C,   C,  C,  C,  C,   /* NUL SOH STX ETX  EOT ENQ ACK BEL */
   0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,
 };
 #undef U
+#undef V
 #undef W
 #undef C
 #undef UW
-#undef UWC
+#undef UVWC
+#undef VC
+#undef VW
 
 /* FN_PORT_SEP is the separator between host and port in file names
    for non-standard port numbers.  On Unix this is normally ':', as in
@@ -1389,10 +1425,14 @@ UWC,  C,  C,  C,   C,  C,  C,  C,   /* NUL SOH STX ETX  EOT ENQ ACK BEL */
 #define FN_PORT_SEP  (opt.restrict_files_os != restrict_windows ? ':' : '+')
 
 /* FN_QUERY_SEP is the separator between the file name and the URL
-   query, normally '?'.  Since Windows cannot handle '?' as part of
+   query, normally '?'.  Because VMS and Windows cannot handle '?' in a
    file name, we use '@' instead there.  */
-#define FN_QUERY_SEP (opt.restrict_files_os != restrict_windows ? '?' : '@')
-#define FN_QUERY_SEP_STR (opt.restrict_files_os != restrict_windows ? "?" : "@")
+#define FN_QUERY_SEP \
+ (((opt.restrict_files_os != restrict_vms) && \
+   (opt.restrict_files_os != restrict_windows)) ? '?' : '@')
+#define FN_QUERY_SEP_STR \
+ (((opt.restrict_files_os != restrict_vms) && \
+   (opt.restrict_files_os != restrict_windows)) ? "?" : "@")
 
 /* Quote path element, characters in [b, e), as file name, and append
    the quoted string to DEST.  Each character is quoted as per
@@ -1411,6 +1451,8 @@ append_uri_pathel (const char *b, const char *e, bool escaped,
   int mask;
   if (opt.restrict_files_os == restrict_unix)
     mask = filechr_not_unix;
+  else if (opt.restrict_files_os == restrict_vms)
+    mask = filechr_not_vms;
   else
     mask = filechr_not_windows;
   if (opt.restrict_files_ctrl)
@@ -1617,7 +1659,26 @@ url_file_name (const struct url *u, char *replaced_filename)
   append_char ('\0', &temp_fnres);
 
   /* Check that the length of the file name is acceptable. */
+#ifdef WINDOWS
+  if (MAX_PATH > (fnres.tail + CHOMP_BUFFER + 2))
+    {
+      max_length = MAX_PATH - (fnres.tail + CHOMP_BUFFER + 2);
+      /* FIXME: In Windows a filename is usually limited to 255 characters.
+      To really be accurate you could call GetVolumeInformation() to get
+      lpMaximumComponentLength
+      */
+      if (max_length > 255)
+        {
+          max_length = 255;
+        }
+    }
+  else
+    {
+      max_length = 0;
+    }
+#else
   max_length = get_max_length (fnres.base, fnres.tail, _PC_NAME_MAX) - CHOMP_BUFFER;
+#endif
   if (max_length > 0 && strlen (temp_fnres.base) > max_length)
     {
       logprintf (LOG_NOTQUIET, "The name is too long, %lu chars total.\n",
@@ -1630,7 +1691,7 @@ url_file_name (const struct url *u, char *replaced_filename)
       logprintf (LOG_NOTQUIET, "New name is %s.\n", temp_fnres.base);
     }
 
-  free (fname_len_check);
+  xfree (fname_len_check);
 
   /* The filename has already been 'cleaned' by append_uri_pathel() above.  So,
    * just append it. */
@@ -1643,18 +1704,19 @@ url_file_name (const struct url *u, char *replaced_filename)
   /* Make a final check that the path length is acceptable? */
   /* TODO: check fnres.base for path length problem */
 
-  free (temp_fnres.base);
+  xfree (temp_fnres.base);
 
   /* Check the cases in which the unique extensions are not used:
      1) Clobbering is turned off (-nc).
      2) Retrieval with regetting.
      3) Timestamping is used.
      4) Hierarchy is built.
+     5) Backups are specified.
 
      The exception is the case when file does exist and is a
      directory (see `mkalldirs' for explanation).  */
 
-  if ((opt.noclobber || opt.always_rest || opt.timestamping || opt.dirstruct)
+  if (ALLOW_CLOBBER
       && !(file_exists_p (fname) && !file_non_directory_p (fname)))
     {
       unique = fname;
@@ -1682,7 +1744,7 @@ url_file_name (const struct url *u, char *replaced_filename)
 
   return unique;
 }
-
+
 /* Resolve "." and ".." elements of PATH by destructively modifying
    PATH and return true if PATH has been modified, false otherwise.
 
@@ -1717,7 +1779,7 @@ path_simplify (enum url_scheme scheme, char *path)
       else if (h[0] == '.' && h[1] == '.' && (h[2] == '/' || h[2] == '\0'))
         {
           /* Handle "../" by retreating the tortoise by one path
-             element -- but not past beggining.  */
+             element -- but not past beginning.  */
           if (t > beg)
             {
               /* Move backwards until T hits the beginning of the
@@ -1725,7 +1787,11 @@ path_simplify (enum url_scheme scheme, char *path)
               for (--t; t > beg && t[-1] != '/'; t--)
                 ;
             }
-          else if (scheme == SCHEME_FTP)
+          else if (scheme == SCHEME_FTP
+#ifdef HAVE_SSL
+              || scheme == SCHEME_FTPS
+#endif
+              )
             {
               /* If we're at the beginning, copy the "../" literally
                  and move the beginning so a later ".." doesn't remove
@@ -1768,7 +1834,7 @@ path_simplify (enum url_scheme scheme, char *path)
 
   return t != h;
 }
-
+
 /* Return the length of URL's path.  Path is considered to be
    terminated by one or more of the ?query or ;params or #fragment,
    depending on the scheme.  */
@@ -1979,7 +2045,7 @@ uri_merge (const char *base, const char *link)
 
   return merge;
 }
-
+
 #define APPEND(p, s) do {                       \
   int len = strlen (s);                         \
   memcpy (p, s, len);                           \
@@ -2023,7 +2089,7 @@ url_string (const struct url *url, enum url_auth_mode auth_mode)
           if (url->passwd)
             {
               if (auth_mode == URL_AUTH_HIDE_PASSWD)
-                quoted_passwd = HIDDEN_PASSWORD;
+                quoted_passwd = (char *) HIDDEN_PASSWORD;
               else
                 quoted_passwd = url_escape_allow_passthrough (url->passwd);
             }
@@ -2096,7 +2162,7 @@ url_string (const struct url *url, enum url_auth_mode auth_mode)
 
   return result;
 }
-
+
 /* Return true if scheme a is similar to scheme b.
 
    Schemes are similar if they are equal.  If SSL is supported, schemes
@@ -2114,7 +2180,7 @@ schemes_are_similar_p (enum url_scheme a, enum url_scheme b)
 #endif
   return false;
 }
-
+
 static int
 getchar_from_escaped_string (const char *str, char *c)
 {
@@ -2175,7 +2241,7 @@ are_urls_equal (const char *u1, const char *u2)
 
   return (*p == 0 && *q == 0 ? true : false);
 }
-
+
 #ifdef TESTING
 /* Debugging and testing support for path_simplify. */
 
@@ -2192,7 +2258,7 @@ ps (char *path)
 #endif
 
 static const char *
-run_test (char *test, char *expected_result, enum url_scheme scheme,
+run_test (const char *test, const char *expected_result, enum url_scheme scheme,
           bool expected_change)
 {
   char *test_copy = xstrdup (test);
@@ -2221,8 +2287,8 @@ run_test (char *test, char *expected_result, enum url_scheme scheme,
 const char *
 test_path_simplify (void)
 {
-  static struct {
-    char *test, *result;
+  static const struct {
+    const char *test, *result;
     enum url_scheme scheme;
     bool should_modify;
   } tests[] = {
@@ -2254,15 +2320,16 @@ test_path_simplify (void)
     { "a/b/../../c",            "c",            SCHEME_HTTP, true },
     { "./a/../b",               "b",            SCHEME_HTTP, true }
   };
-  int i;
+  unsigned i;
 
   for (i = 0; i < countof (tests); i++)
     {
       const char *message;
-      char *test = tests[i].test;
-      char *expected_result = tests[i].result;
+      const char *test = tests[i].test;
+      const char *expected_result = tests[i].result;
       enum url_scheme scheme = tests[i].scheme;
       bool  expected_change = tests[i].should_modify;
+
       message = run_test (test, expected_result, scheme, expected_change);
       if (message) return message;
     }
@@ -2270,19 +2337,19 @@ test_path_simplify (void)
 }
 
 const char *
-test_append_uri_pathel()
+test_append_uri_pathel(void)
 {
-  int i;
-  struct {
-    char *original_url;
-    char *input;
+  unsigned i;
+  static const struct {
+    const char *original_url;
+    const char *input;
     bool escaped;
-    char *expected_result;
+    const char *expected_result;
   } test_array[] = {
     { "http://www.yoyodyne.com/path/", "somepage.html", false, "http://www.yoyodyne.com/path/somepage.html" },
   };
 
-  for (i = 0; i < sizeof(test_array)/sizeof(test_array[0]); ++i)
+  for (i = 0; i < countof(test_array); ++i)
     {
       struct growable dest;
       const char *p = test_array[i].input;
@@ -2294,18 +2361,19 @@ test_append_uri_pathel()
 
       mu_assert ("test_append_uri_pathel: wrong result",
                  strcmp (dest.base, test_array[i].expected_result) == 0);
+      xfree (dest.base);
     }
 
   return NULL;
 }
 
-const char*
-test_are_urls_equal()
+const char *
+test_are_urls_equal(void)
 {
-  int i;
-  struct {
-    char *url1;
-    char *url2;
+  unsigned i;
+  static const struct {
+    const char *url1;
+    const char *url2;
     bool expected_result;
   } test_array[] = {
     { "http://www.adomain.com/apath/", "http://www.adomain.com/apath/",       true },
@@ -2316,7 +2384,7 @@ test_are_urls_equal()
     { "http://www.adomain.com/path%2f", "http://www.adomain.com/path/",       false },
   };
 
-  for (i = 0; i < sizeof(test_array)/sizeof(test_array[0]); ++i)
+  for (i = 0; i < countof(test_array); ++i)
     {
       mu_assert ("test_are_urls_equal: wrong result",
                  are_urls_equal (test_array[i].url1, test_array[i].url2) == test_array[i].expected_result);
@@ -2330,4 +2398,3 @@ test_are_urls_equal()
 /*
  * vim: et ts=2 sw=2
  */
-

@@ -1,6 +1,6 @@
 /* HTML parser for Wget.
    Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006,
-   2007, 2008, 2009, 2010, 2011 Free Software Foundation, Inc.
+   2007, 2008, 2009, 2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -253,7 +253,7 @@ struct pool {
       (sizevar) = ga_newsize;                                                   \
     }                                                                           \
 } while (0)
-
+
 /* Test whether n+1-sized entity name fits in P.  We don't support
    IE-style non-terminated entities, e.g. "&ltfoo" -> "<foo".
    However, "&lt;foo" will work, as will "&lt!foo", "&lt", etc.  In
@@ -517,7 +517,7 @@ convert_and_copy (struct pool *pool, const char *beg, const char *end, int flags
         *p = c_tolower (*p);
     }
 }
-
+
 /* Originally we used to adhere to rfc 1866 here, and allowed only
    letters, digits, periods, and hyphens as names (of tags or
    attributes).  However, this broke too many pages which used
@@ -770,7 +770,7 @@ find_comment_end (const char *beg, const char *end)
       }
   return NULL;
 }
-
+
 /* Return true if the string containing of characters inside [b, e) is
    present in hash table HT.  */
 
@@ -881,7 +881,7 @@ map_html_tags (const char *text, int size,
     if (*p == '!')
       {
         if (!(flags & MHT_STRICT_COMMENTS)
-            && p < end + 3 && p[1] == '-' && p[2] == '-')
+            && p + 3 < end && p[1] == '-' && p[2] == '-')
           {
             /* If strict comments are not enforced and if we know
                we're looking at a comment, simply look for the
@@ -1167,7 +1167,7 @@ map_html_tags (const char *text, int size,
 #undef ADVANCE
 #undef SKIP_WS
 #undef SKIP_NON_WS
-
+
 #ifdef STANDALONE
 static void
 test_mapper (struct taginfo *taginfo, void *arg)
@@ -1188,6 +1188,14 @@ int main ()
   int length = 0;
   int read_count;
   int tag_counter = 0;
+
+#ifdef ENABLE_NLS
+  /* Set the current locale.  */
+  setlocale (LC_ALL, "");
+  /* Set the text message domain.  */
+  bindtextdomain ("wget", LOCALEDIR);
+  textdomain ("wget");
+#endif /* ENABLE_NLS */
 
   while ((read_count = fread (x + length, 1, size - length, stdin)))
     {

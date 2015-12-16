@@ -21,7 +21,7 @@ my %urls = (
 );
 
 unless(-e "/dev/full") {
-    exit(2); # skip
+    exit 77; # skip
 }
 
 my $cmdline = $WgetTest::WGETPATH . " -c http://localhost:{{port}}/somefile.txt -O /dev/full";
@@ -36,8 +36,7 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-stdouterr",
-                              input => \%urls,
+my $the_test = HTTPTest->new (input => \%urls,
                               cmdline => $cmdline,
                               errcode => $expected_error_code,
                               existing => \%existing_files,
@@ -45,4 +44,3 @@ my $the_test = HTTPTest->new (name => "Test-stdouterr",
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

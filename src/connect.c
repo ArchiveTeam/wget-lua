@@ -1,6 +1,6 @@
 /* Establishing and handling network connections.
    Copyright (C) 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
-   2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software
+   2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
    Foundation, Inc.
 
 This file is part of GNU Wget.
@@ -54,15 +54,17 @@ as that of the covered work.  */
 #include <errno.h>
 #include <string.h>
 #include <sys/time.h>
+
+#ifdef ENABLE_IRI
+#include <idn-free.h>
+#endif
+
 #include "utils.h"
 #include "host.h"
 #include "connect.h"
 #include "hash.h"
 
-/* Apparently needed for Interix: */
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
-#endif
+#include <stdint.h>
 
 /* Define sockaddr_storage where unavailable (presumably on IPv4-only
    hosts).  */
@@ -171,7 +173,7 @@ sockaddr_size (const struct sockaddr *sa)
       abort ();
     }
 }
-
+
 /* Resolve the bind address specified via --bind-address and store it
    to SA.  The resolved value is stored in a static variable and
    reused after the first invocation of this function.
@@ -216,7 +218,7 @@ resolve_bind_address (struct sockaddr *sa)
   should_bind = true;
   return true;
 }
-
+
 struct cwt_context {
   int fd;
   const struct sockaddr *addr;
@@ -253,7 +255,7 @@ connect_with_timeout (int fd, const struct sockaddr *addr, socklen_t addrlen,
     errno = ETIMEDOUT;
   return ctx.result;
 }
-
+
 /* Connect via TCP to the specified address and port.
 
    If PRINT is non-NULL, it is the host name to print that we're
@@ -273,7 +275,7 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
       const char *txt_addr = print_address (ip);
       if (0 != strcmp (print, txt_addr))
         {
-				  char *str = NULL, *name;
+          char *str = NULL, *name;
 
           if (opt.enable_iri && (name = idn_decode ((char *) print)) != NULL)
             {
@@ -281,24 +283,23 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
               str = xmalloc (len);
               snprintf (str, len, "%s (%s)", name, print);
               str[len-1] = '\0';
-              xfree (name);
+              idn_free (name);
             }
 
           logprintf (LOG_VERBOSE, _("Connecting to %s|%s|:%d... "),
                      str ? str : escnonprint_uri (print), txt_addr, port);
 
-					if (str)
-					  xfree (str);
+          xfree (str);
         }
       else
-       {
+        {
            if (ip->family == AF_INET)
                logprintf (LOG_VERBOSE, _("Connecting to %s:%d... "), txt_addr, port);
 #ifdef ENABLE_IPV6
            else if (ip->family == AF_INET6)
                logprintf (LOG_VERBOSE, _("Connecting to [%s]:%d... "), txt_addr, port);
 #endif
-       }
+        }
     }
 
   /* Store the sockaddr info to SA.  */
@@ -370,7 +371,7 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
     if (sock >= 0)
       fd_close (sock);
     if (print)
-      logprintf (LOG_VERBOSE, _("failed: %s.\n"), strerror (errno));
+      logprintf (LOG_NOTQUIET, _("failed: %s.\n"), strerror (errno));
     errno = save_errno;
     return -1;
   }
@@ -432,7 +433,7 @@ connect_to_host (const char *host, int port)
 
   return -1;
 }
-
+
 /* Create a socket, bind it to local interface BIND_ADDRESS on port
    *PORT, set up a listen backlog, and return the resulting socket, or
    -1 in case of error.
@@ -559,6 +560,7 @@ socket_ip_address (int sock, ip_address *ip, int endpoint)
   if (ret < 0)
     return false;
 
+  memset(ip, 0, sizeof(ip_address));
   ip->family = sockaddr->sa_family;
   switch (sockaddr->sa_family)
     {
@@ -748,7 +750,7 @@ wget uses blocking sockets so we must convert them back to blocking
        or EOF/error. */
     return false;
 }
-
+
 /* Basic socket operations, mostly EINTR wrappers.  */
 
 static int
@@ -796,7 +798,7 @@ sock_close (int fd)
 #undef read
 #undef write
 #undef close
-
+
 /* Reading and writing from the network.  We build around the socket
    (file descriptor) API, but support "extended" operations for things
    that are not mere file descriptors under the hood, such as SSL
@@ -847,7 +849,7 @@ void *
 fd_transport_context (int fd)
 {
   struct transport_info *info = hash_table_get (transport_map, (void *)(intptr_t) fd);
-  return info->ctx;
+  return info ? info->ctx : NULL;
 }
 
 /* When fd_read/fd_write are called multiple times in a loop, they should

@@ -1,5 +1,5 @@
 /* Read and parse the .netrc file to get hosts, accounts, and passwords.
-   Copyright (C) 1996, 2007, 2008, 2009, 2010, 2011 Free Software
+   Copyright (C) 1996, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
    Foundation, Inc.
 
 This file is part of GNU Wget.
@@ -44,9 +44,15 @@ as that of the covered work.  */
 
 #define NETRC_FILE_NAME ".netrc"
 
-acc_t *netrc_list;
+static acc_t *netrc_list;
 
 static acc_t *parse_netrc (const char *);
+
+void
+netrc_cleanup(void)
+{
+  free_netrc (netrc_list);
+}
 
 /* Return the correct user and password, given the host, user (as
    given in the URL), and password (as given in the URL).  May return
@@ -155,57 +161,13 @@ search_netrc (const char *host, const char **acc, const char **passwd,
 
 #ifdef STANDALONE
 
-#include <assert.h>
-
 /* Normally, these functions would be defined by your package.  */
 # define xmalloc malloc
-# define xfree free
+# define xfree(p) do { free ((void *) (p)); p = NULL; } while (0)
 # define xstrdup strdup
 
 # define xrealloc realloc
 
-/* Read a line from FP.  The function reallocs the storage as needed
-   to accomodate for any length of the line.  Reallocs are done
-   storage exponentially, doubling the storage after each overflow to
-   minimize the number of calls to realloc() and fgets().  The newline
-   character at the end of line is retained.
-
-   After end-of-file is encountered without anything being read, NULL
-   is returned.  NULL is also returned on error.  To distinguish
-   between these two cases, use the stdio function ferror().  */
-
-char *
-read_whole_line (FILE *fp)
-{
-  int length = 0;
-  int bufsize = 81;
-  char *line = xmalloc (bufsize);
-
-  while (fgets (line + length, bufsize - length, fp))
-    {
-      length += strlen (line + length);
-      assert (length > 0);
-      if (line[length - 1] == '\n')
-        break;
-      /* fgets() guarantees to read the whole line, or to use up the
-         space we've given it.  We can double the buffer
-         unconditionally.  */
-      bufsize <<= 1;
-      line = xrealloc (line, bufsize);
-    }
-  if (length == 0 || ferror (fp))
-    {
-      xfree (line);
-      return NULL;
-    }
-  if (length + 1 < bufsize)
-    /* Relieve the memory from our exponential greediness.  We say
-       `length + 1' because the terminating \0 is not included in
-       LENGTH.  We don't need to zero-terminate the string ourselves,
-       though, because fgets() does that.  */
-    line = xrealloc (line, length + 1);
-  return line;
-}
 #endif /* STANDALONE */
 
 /* Maybe add NEWENTRY to the account information list, LIST.  NEWENTRY is
@@ -221,9 +183,9 @@ maybe_add_to_list (acc_t **newentry, acc_t **list)
   if (a && ! a->acc)
     {
       /* Free any allocated space.  */
-      xfree_null (a->host);
-      xfree_null (a->acc);
-      xfree_null (a->passwd);
+      xfree (a->host);
+      xfree (a->acc);
+      xfree (a->passwd);
     }
   else
     {
@@ -264,10 +226,11 @@ static acc_t *
 parse_netrc (const char *path)
 {
   FILE *fp;
-  char *line, *p, *tok;
+  char *line = NULL, *p, *tok;
   const char *premature_token;
   acc_t *current, *retval;
   int ln, qmark;
+  size_t bufsize = 0;
 
   /* The latest token we've seen in the file.  */
   enum
@@ -290,7 +253,7 @@ parse_netrc (const char *path)
   premature_token = NULL;
 
   /* While there are lines in the file...  */
-  while ((line = read_whole_line (fp)) != NULL)
+  while (getline (&line, &bufsize, fp) > 0)
     {
       ln ++;
 
@@ -423,10 +386,9 @@ parse_netrc (const char *path)
                          exec_name, path, ln, tok);
             }
         }
-
-      xfree (line);
     }
 
+  xfree (line);
   fclose (fp);
 
   /* Finalize the last machine entry we found.  */
@@ -462,9 +424,9 @@ free_netrc(acc_t *l)
   while (l)
     {
       t = l->next;
-      xfree_null (l->acc);
-      xfree_null (l->passwd);
-      xfree_null (l->host);
+      xfree (l->acc);
+      xfree (l->passwd);
+      xfree (l->host);
       xfree (l);
       l = t;
     }
@@ -484,18 +446,26 @@ main (int argc, char **argv)
   if (argc < 2 || argc > 3)
     {
       fprintf (stderr, _("Usage: %s NETRC [HOSTNAME]\n"), argv[0]);
-      exit (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
 
   program_name = argv[0];
   file = argv[1];
   target = argv[2];
 
+#ifdef ENABLE_NLS
+  /* Set the current locale.  */
+  setlocale (LC_ALL, "");
+  /* Set the text message domain.  */
+  bindtextdomain ("wget", LOCALEDIR);
+  textdomain ("wget");
+#endif /* ENABLE_NLS */
+
   if (stat (file, &sb))
     {
       fprintf (stderr, _("%s: cannot stat %s: %s\n"), argv[0], file,
                strerror (errno));
-      exit (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
 
   head = parse_netrc (file);
@@ -534,14 +504,14 @@ main (int argc, char **argv)
 
       /* Exit if we found the target.  */
       if (target)
-        exit (0);
+        exit (WGET_EXIT_SUCCESS);
       a = a->next;
     }
 
   /* Exit with failure if we had a target, success otherwise.  */
   if (target)
-    exit (1);
+    exit (WGET_EXIT_GENERIC_ERROR);
 
-  exit (0);
+  exit (WGET_EXIT_SUCCESS);
 }
 #endif /* STANDALONE */

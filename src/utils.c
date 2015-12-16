@@ -1,7 +1,7 @@
 /* Various utility functions.
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -64,8 +64,8 @@ as that of the covered work.  */
 #include <sys/stat.h>
 
 /* For TIOCGWINSZ and friends: */
-#include <sys/ioctl.h>
-#ifdef HAVE_TERMIOS_H
+#ifndef WINDOWS
+# include <sys/ioctl.h>
 # include <termios.h>
 #endif
 
@@ -100,7 +100,10 @@ as that of the covered work.  */
 #include "test.h"
 #endif
 
-static void
+#include "exits.h"
+#include "c-strcase.h"
+
+static void _Noreturn
 memfatal (const char *context, long attempted_size)
 {
   /* Make sure we don't try to store part of the log line, and thus
@@ -123,7 +126,7 @@ memfatal (const char *context, long attempted_size)
                  exec_name, context, attempted_size);
     }
 
-  exit (1);
+  exit (WGET_EXIT_GENERIC_ERROR);
 }
 
 /* Character property table for (re-)escaping VMS ODS5 extended file
@@ -267,7 +270,7 @@ sepstring (const char *s)
   res[i + 1] = NULL;
   return res;
 }
-
+
 /* Like sprintf, but prints into a string of sufficient size freshly
    allocated with malloc, which is returned.  If unable to print due
    to invalid format, returns NULL.  Inability to allocate needed
@@ -333,7 +336,7 @@ aprintf (const char *fmt, ...)
         {                               /* maybe we have some wrong
                                            format string? */
           logprintf (LOG_ALWAYS,
-                     _("%s: aprintf: text buffer is too big (%ld bytes), "
+                     _("%s: aprintf: text buffer is too big (%d bytes), "
                        "aborting.\n"),
                      exec_name, size);  /* printout a log message */
           abort ();                     /* and abort... */
@@ -349,6 +352,32 @@ aprintf (const char *fmt, ...)
 #endif /* not HAVE_VASPRINTF */
 }
 
+#ifndef HAVE_STRLCPY
+/* strlcpy() is a BSD function that sometimes is really handy.
+ * It is the same as snprintf(dst,dstsize,"%s",src), but much faster. */
+
+size_t
+strlcpy (char *dst, const char *src, size_t size)
+{
+  const char *old = src;
+
+  /* Copy as many bytes as will fit */
+  if (size)
+    {
+      while (--size)
+        {
+          if (!(*dst++ = *src++))
+            return src - old - 1;
+        }
+
+      *dst = 0;
+    }
+
+  while (*src++);
+  return src - old - 1;
+}
+#endif
+
 /* Concatenate the NULL-terminated list of string arguments into
    freshly allocated space.  */
 
@@ -356,47 +385,30 @@ char *
 concat_strings (const char *str0, ...)
 {
   va_list args;
-  int saved_lengths[5];         /* inspired by Apache's apr_pstrcat */
-  char *ret, *p;
+  const char *arg;
+  size_t length = 0, pos = 0;
+  char *s;
 
-  const char *next_str;
-  int total_length = 0;
-  size_t argcount;
+  if (!str0)
+    return NULL;
 
-  /* Calculate the length of and allocate the resulting string. */
-
-  argcount = 0;
+  /* calculate the length of the resulting string */
   va_start (args, str0);
-  for (next_str = str0; next_str != NULL; next_str = va_arg (args, char *))
-    {
-      int len = strlen (next_str);
-      if (argcount < countof (saved_lengths))
-        saved_lengths[argcount++] = len;
-      total_length += len;
-    }
+  for (arg = str0; arg; arg = va_arg (args, const char *))
+    length += strlen(arg);
   va_end (args);
-  p = ret = xmalloc (total_length + 1);
 
-  /* Copy the strings into the allocated space. */
+  s = xmalloc (length + 1);
 
-  argcount = 0;
+  /* concatenate strings */
   va_start (args, str0);
-  for (next_str = str0; next_str != NULL; next_str = va_arg (args, char *))
-    {
-      int len;
-      if (argcount < countof (saved_lengths))
-        len = saved_lengths[argcount++];
-      else
-        len = strlen (next_str);
-      memcpy (p, next_str, len);
-      p += len;
-    }
+  for (arg = str0; arg; arg = va_arg (args, const char *))
+    pos += strlcpy(s + pos, arg, length - pos + 1);
   va_end (args);
-  *p = '\0';
 
-  return ret;
+  return s;
 }
-
+
 /* Format the provided time according to the specified format.  The
    format is a string with format elements supported by strftime.  */
 
@@ -430,7 +442,7 @@ datetime_str (time_t t)
 {
   return fmttime(t, "%Y-%m-%d %H:%M:%S");
 }
-
+
 /* The Windows versions of the following two functions are defined in
    mswindows.c. On MSDOS this function should never be called. */
 
@@ -471,7 +483,7 @@ fork_to_background (void)
     {
       /* parent, error */
       perror ("fork");
-      exit (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
   else if (pid != 0)
     {
@@ -479,20 +491,23 @@ fork_to_background (void)
       printf (_("Continuing in background, pid %d.\n"), (int) pid);
       if (logfile_changed)
         printf (_("Output will be written to %s.\n"), quote (opt.lfilename));
-      exit (0);                 /* #### should we use _exit()? */
+      exit (WGET_EXIT_SUCCESS);                 /* #### should we use _exit()? */
     }
 
   /* child: give up the privileges and keep running. */
   setsid ();
-  freopen ("/dev/null", "r", stdin);
-  freopen ("/dev/null", "w", stdout);
-  freopen ("/dev/null", "w", stderr);
+  if (freopen ("/dev/null", "r", stdin) == NULL)
+    DEBUGP (("Failed to redirect stdin to /dev/null.\n"));
+  if (freopen ("/dev/null", "w", stdout) == NULL)
+    DEBUGP (("Failed to redirect stdout to /dev/null.\n"));
+  if (freopen ("/dev/null", "w", stderr) == NULL)
+    DEBUGP (("Failed to redirect stderr to /dev/null.\n"));
 }
 #endif /* !WINDOWS && !MSDOS */
 
 #endif /* def __VMS [else] */
 
-
+
 /* "Touch" FILE, i.e. make its mtime ("modified time") equal the time
    specified with TM.  The atime ("access time") is set to the current
    time.  */
@@ -703,7 +718,7 @@ unique_create (const char *name, bool binary, char **opened_name)
       xfree (uname);
       uname = unique_name (name, false);
     }
-  if (opened_name && fp != NULL)
+  if (opened_name)
     {
       if (fp)
         *opened_name = uname;
@@ -802,7 +817,7 @@ fopen_excl (const char *fname, int binary)
   return fopen (fname, binary ? "wb" : "w");
 #endif /* not O_EXCL */
 }
-
+
 /* Create DIRECTORY.  If some of the pathname components of DIRECTORY
    are missing, create them first.  In case any mkdir() call fails,
    return its error status.  Returns 0 on successful completion.
@@ -868,7 +883,7 @@ file_merge (const char *base, const char *file)
 
   return result;
 }
-
+
 /* Like fnmatch, but performs a case-insensitive match.  */
 
 int
@@ -900,15 +915,14 @@ static bool in_acclist (const char *const *, const char *, bool);
 bool
 acceptable (const char *s)
 {
-  int l = strlen (s);
+  const char *p;
 
   if (opt.output_document && strcmp (s, opt.output_document) == 0)
     return true;
 
-  while (l && s[l] != '/')
-    --l;
-  if (s[l] == '/')
-    s += (l + 1);
+  if ((p = strrchr (s, '/')))
+    s = p + 1;
+
   if (opt.accepts)
     {
       if (opt.rejects)
@@ -919,6 +933,7 @@ acceptable (const char *s)
     }
   else if (opt.rejects)
     return !in_acclist ((const char *const *)opt.rejects, s, true);
+
   return true;
 }
 
@@ -957,16 +972,16 @@ subdir_p (const char *d1, const char *d2)
    first element that matches DIR, through wildcards or front comparison (as
    appropriate).  */
 static bool
-dir_matches_p (char **dirlist, const char *dir)
+dir_matches_p (const char **dirlist, const char *dir)
 {
-  char **x;
+  const char **x;
   int (*matcher) (const char *, const char *, int)
     = opt.ignore_case ? fnmatch_nocase : fnmatch;
 
   for (x = dirlist; *x; x++)
     {
       /* Remove leading '/' */
-      char *p = *x + (**x == '/');
+      const char *p = *x + (**x == '/');
       if (has_wildcards_p (p))
         {
           if (matcher (p, dir, FNM_PATHNAME) == 0)
@@ -1018,29 +1033,15 @@ accdir (const char *directory)
 bool
 match_tail (const char *string, const char *tail, bool fold_case)
 {
-  int i, j;
+  int pos = strlen (string) - strlen (tail);
 
-  /* We want this to be fast, so we code two loops, one with
-     case-folding, one without. */
+  if (pos < 0)
+    return false;  /* tail is longer than string.  */
 
   if (!fold_case)
-    {
-      for (i = strlen (string), j = strlen (tail); i >= 0 && j >= 0; i--, j--)
-        if (string[i] != tail[j])
-          break;
-    }
+    return !strcmp (string + pos, tail);
   else
-    {
-      for (i = strlen (string), j = strlen (tail); i >= 0 && j >= 0; i--, j--)
-        if (c_tolower (string[i]) != c_tolower (tail[j]))
-          break;
-    }
-
-  /* If the tail was exhausted, the match was succesful.  */
-  if (j == -1)
-    return true;
-  else
-    return false;
+    return !strcasecmp (string + pos, tail);
 }
 
 /* Checks whether string S matches each element of ACCEPTS.  A list
@@ -1089,15 +1090,12 @@ in_acclist (const char *const *accepts, const char *s, bool backward)
 char *
 suffix (const char *str)
 {
-  int i;
+  char *p;
 
-  for (i = strlen (str); i && str[i] != '/' && str[i] != '.'; i--)
-    ;
+  if ((p = strrchr (str, '.')) && !strchr (p + 1, '/'))
+    return p + 1;
 
-  if (str[i++] == '.')
-    return (char *)str + i;
-  else
-    return NULL;
+  return NULL;
 }
 
 /* Return true if S contains globbing wildcards (`*', `?', `[' or
@@ -1106,10 +1104,7 @@ suffix (const char *str)
 bool
 has_wildcards_p (const char *s)
 {
-  for (; *s; s++)
-    if (*s == '*' || *s == '?' || *s == '[' || *s == ']')
-      return true;
-  return false;
+  return !!strpbrk (s, "*?[]");
 }
 
 /* Return true if FNAME ends with a typical HTML suffix.  The
@@ -1129,65 +1124,15 @@ has_html_suffix_p (const char *fname)
 
   if ((suf = suffix (fname)) == NULL)
     return false;
-  if (!strcasecmp (suf, "html"))
+  if (!c_strcasecmp (suf, "html"))
     return true;
-  if (!strcasecmp (suf, "htm"))
+  if (!c_strcasecmp (suf, "htm"))
     return true;
-  if (suf[0] && !strcasecmp (suf + 1, "html"))
+  if (suf[0] && !c_strcasecmp (suf + 1, "html"))
     return true;
   return false;
 }
 
-/* Read a line from FP and return the pointer to freshly allocated
-   storage.  The storage space is obtained through malloc() and should
-   be freed with free() when it is no longer needed.
-
-   The length of the line is not limited, except by available memory.
-   The newline character at the end of line is retained.  The line is
-   terminated with a zero character.
-
-   After end-of-file is encountered without anything being read, NULL
-   is returned.  NULL is also returned on error.  To distinguish
-   between these two cases, use the stdio function ferror().  */
-
-char *
-read_whole_line (FILE *fp)
-{
-  int length = 0;
-  int bufsize = 82;
-  char *line = xmalloc (bufsize);
-
-  while (fgets (line + length, bufsize - length, fp))
-    {
-      length += strlen (line + length);
-      if (length == 0)
-        /* Possible for example when reading from a binary file where
-           a line begins with \0.  */
-        continue;
-
-      if (line[length - 1] == '\n')
-        break;
-
-      /* fgets() guarantees to read the whole line, or to use up the
-         space we've given it.  We can double the buffer
-         unconditionally.  */
-      bufsize <<= 1;
-      line = xrealloc (line, bufsize);
-    }
-  if (length == 0 || ferror (fp))
-    {
-      xfree (line);
-      return NULL;
-    }
-  if (length + 1 < bufsize)
-    /* Relieve the memory from our exponential greediness.  We say
-       `length + 1' because the terminating \0 is not included in
-       LENGTH.  We don't need to zero-terminate the string ourselves,
-       though, because fgets() does that.  */
-    line = xrealloc (line, length + 1);
-  return line;
-}
-
 /* Read FILE into memory.  A pointer to `struct file_memory' are
    returned; use struct element `content' to access file contents, and
    the element `length' to know the file length.  `content' is *not*
@@ -1329,7 +1274,7 @@ wget_read_file_free (struct file_memory *fm)
     }
   xfree (fm);
 }
-
+
 /* Free the pointers in a NULL-terminated vector of pointers, then
    free the pointer itself.  */
 void
@@ -1339,7 +1284,10 @@ free_vec (char **vec)
     {
       char **p = vec;
       while (*p)
-        xfree (*p++);
+        {
+          xfree (*p);
+          p++;
+        }
       xfree (vec);
     }
 }
@@ -1398,7 +1346,7 @@ vec_append (char **vec, const char *str)
   vec[cnt] = NULL;
   return vec;
 }
-
+
 /* Sometimes it's useful to create "sets" of strings, i.e. special
    hash tables where you want to store strings as keys and merely
    query for their existence.  Here is a set of utility routines that
@@ -1463,7 +1411,7 @@ free_keys_and_values (struct hash_table *ht)
       xfree (iter.value);
     }
 }
-
+
 /* Get digit grouping data for thousand separors by calling
    localeconv().  The data includes separator string and grouping info
    and is cached after the first call to the function.
@@ -1590,7 +1538,7 @@ with_thousand_seps (wgint n)
    some detail.  */
 
 char *
-human_readable (HR_NUMTYPE n)
+human_readable (HR_NUMTYPE n, const int acc, const int decimals)
 {
   /* These suffixes are compatible with those of GNU `ls -lh'. */
   static char powers[] =
@@ -1623,10 +1571,10 @@ human_readable (HR_NUMTYPE n)
       if ((n / 1024) < 1024 || i == countof (powers) - 1)
         {
           double val = n / 1024.0;
-          /* Print values smaller than 10 with one decimal digits, and
-             others without any decimals.  */
+          /* Print values smaller than the accuracy level (acc) with (decimal)
+           * decimal digits, and others without any decimals.  */
           snprintf (buf, sizeof (buf), "%.*f%c",
-                    val < 10 ? 1 : 0, val, powers[i]);
+                    val < acc ? decimals : 0, val, powers[i]);
           return buf;
         }
       n /= 1024;
@@ -1854,7 +1802,7 @@ convert_to_bits (wgint num)
   return num;
 }
 
-
+
 /* Determine the width of the terminal we're running on.  If that's
    not possible, return 0.  */
 
@@ -1867,7 +1815,7 @@ determine_screen_width (void)
   int fd;
   struct winsize wsz;
 
-  if (opt.lfilename != NULL)
+  if (opt.lfilename != NULL && opt.show_progress != 1)
     return 0;
 
   fd = fileno (stderr);
@@ -1884,7 +1832,7 @@ determine_screen_width (void)
   return 0;
 #endif /* neither TIOCGWINSZ nor WINDOWS */
 }
-
+
 /* Whether the rnd system (either rand or [dl]rand48) has been
    seeded.  */
 static int rnd_seeded;
@@ -1904,7 +1852,14 @@ static int rnd_seeded;
 int
 random_number (int max)
 {
-#ifdef HAVE_DRAND48
+#ifdef HAVE_RANDOM
+  if (!rnd_seeded)
+    {
+      srandom ((long) time (NULL) ^ (long) getpid ());
+      rnd_seeded = 1;
+    }
+  return random () % max;
+#elif defined HAVE_DRAND48
   if (!rnd_seeded)
     {
       srand48 ((long) time (NULL) ^ (long) getpid ());
@@ -1939,7 +1894,9 @@ random_number (int max)
 double
 random_float (void)
 {
-#ifdef HAVE_DRAND48
+#ifdef HAVE_RANDOM
+    return ((double) random_number (RAND_MAX)) / RAND_MAX;
+#elif defined HAVE_DRAND48
   if (!rnd_seeded)
     {
       srand48 ((long) time (NULL) ^ (long) getpid ());
@@ -1953,7 +1910,7 @@ random_float (void)
           + random_number (10000) / (10000.0 * 10000.0 * 10000.0 * 10000.0));
 #endif /* not HAVE_DRAND48 */
 }
-
+
 /* Implementation of run_with_timeout, a generic timeout-forcing
    routine for systems with Unix-like signal handling.  */
 
@@ -1963,8 +1920,8 @@ random_float (void)
 
 static sigjmp_buf run_with_timeout_env;
 
-static void
-abort_run_with_timeout (int sig)
+static void _Noreturn
+abort_run_with_timeout (int sig _GL_UNUSED)
 {
   assert (sig == SIGALRM);
   siglongjmp (run_with_timeout_env, -1);
@@ -1974,8 +1931,8 @@ abort_run_with_timeout (int sig)
 
 static jmp_buf run_with_timeout_env;
 
-static void
-abort_run_with_timeout (int sig)
+static void _Noreturn
+abort_run_with_timeout (int sig _GL_UNUSED)
 {
   assert (sig == SIGALRM);
   /* We don't have siglongjmp to preserve the set of blocked signals;
@@ -2112,7 +2069,7 @@ run_with_timeout (double timeout, void (*fun) (void *), void *arg)
 }
 #endif /* not WINDOWS */
 #endif /* not USE_SIGNAL_TIMEOUT */
-
+
 #ifndef WINDOWS
 
 /* Sleep the specified amount of seconds.  On machines without
@@ -2172,8 +2129,8 @@ xsleep (double seconds)
    This implementation does not emit newlines after 76 characters of
    base64 data.  */
 
-int
-base64_encode (const void *data, int length, char *dest)
+size_t
+base64_encode (const void *data, size_t length, char *dest)
 {
   /* Conversion table.  */
   static const char tbl[64] = {
@@ -2235,12 +2192,12 @@ base64_encode (const void *data, int length, char *dest)
 
    Since DEST is assumed to contain binary data, it is not
    NUL-terminated.  The function returns the length of the data
-   written to TO.  -1 is returned in case of error caused by malformed
+   written to "TO".  -1 is returned in case of error caused by malformed
    base64 input.
 
    This function originates from Free Recode.  */
 
-int
+ssize_t
 base64_decode (const char *base64, void *dest)
 {
   /* Table of base64 values for first 128 characters.  Note that this
@@ -2353,12 +2310,13 @@ compile_posix_regex (const char *str)
   int errcode = regcomp ((regex_t *) regex, str, REG_EXTENDED | REG_NOSUB);
   if (errcode != 0)
     {
-      int errbuf_size = regerror (errcode, (regex_t *) regex, NULL, 0);
+      size_t errbuf_size = regerror (errcode, (regex_t *) regex, NULL, 0);
       char *errbuf = xmalloc (errbuf_size);
       regerror (errcode, (regex_t *) regex, errbuf, errbuf_size);
       fprintf (stderr, _("Invalid regular expression %s, %s\n"),
                quote (str), errbuf);
       xfree (errbuf);
+      xfree (regex);
       return NULL;
     }
 
@@ -2371,10 +2329,10 @@ compile_posix_regex (const char *str)
 bool
 match_pcre_regex (const void *regex, const char *str)
 {
-  int l = strlen (str);
+  size_t l = strlen (str);
   int ovector[OVECCOUNT];
 
-  int rc = pcre_exec ((pcre *) regex, 0, str, l, 0, 0, ovector, OVECCOUNT);
+  int rc = pcre_exec ((pcre *) regex, 0, str, (int) l, 0, 0, ovector, OVECCOUNT);
   if (rc == PCRE_ERROR_NOMATCH)
     return false;
   else if (rc < 0)
@@ -2400,7 +2358,7 @@ match_posix_regex (const void *regex, const char *str)
     return true;
   else
     {
-      int errbuf_size = regerror (rc, opt.acceptregex, NULL, 0);
+      size_t errbuf_size = regerror (rc, opt.acceptregex, NULL, 0);
       char *errbuf = xmalloc (errbuf_size);
       regerror (rc, opt.acceptregex, errbuf, errbuf_size);
       logprintf (LOG_VERBOSE, _("Error while matching %s: %d\n"),
@@ -2412,7 +2370,7 @@ match_posix_regex (const void *regex, const char *str)
 
 #undef IS_ASCII
 #undef NEXT_CHAR
-
+
 /* Simple merge sort for use by stable_sort.  Implementation courtesy
    Zeljko Vrba with additional debugging by Nenad Barbutov.  */
 
@@ -2458,7 +2416,7 @@ stable_sort (void *base, size_t nmemb, size_t size,
       mergesort_internal (base, temp, size, 0, nmemb - 1, cmpfun);
     }
 }
-
+
 /* Print a decimal number.  If it is equal to or larger than ten, the
    number is rounded.  Otherwise it is printed with one significant
    digit without trailing zeros and with no more than three fractional
@@ -2496,7 +2454,7 @@ print_decimal (double number)
 
 /* Get the maximum name length for the given path. */
 /* Return 0 if length is unknown. */
-size_t
+long
 get_max_length (const char *path, int length, int name)
 {
   long ret;
@@ -2548,21 +2506,36 @@ get_max_length (const char *path, int length, int name)
   return ret;
 }
 
+void
+wg_hex_to_string (char *str_buffer, const char *hex_buffer, size_t hex_len)
+{
+  size_t i;
+
+  for (i = 0; i < hex_len; i++)
+    {
+      /* Each byte takes 2 characters.  */
+      sprintf (str_buffer + 2 * i, "%02x", hex_buffer[i] & 0xFF);
+    }
+
+  /* Null-terminate result.  */
+  str_buffer[2 * i] = '\0';
+}
+
 #ifdef TESTING
 
 const char *
-test_subdir_p()
+test_subdir_p(void)
 {
-  int i;
-  struct {
-    char *d1;
-    char *d2;
+  static const struct {
+    const char *d1;
+    const char *d2;
     bool result;
   } test_array[] = {
     { "/somedir", "/somedir", true },
     { "/somedir", "/somedir/d2", true },
     { "/somedir/d1", "/somedir", false },
   };
+  unsigned i;
 
   for (i = 0; i < countof(test_array); ++i)
     {
@@ -2576,12 +2549,11 @@ test_subdir_p()
 }
 
 const char *
-test_dir_matches_p()
+test_dir_matches_p(void)
 {
-  int i;
-  struct {
-    char *dirlist[3];
-    char *dir;
+  static struct {
+    const char *dirlist[3];
+    const char *dir;
     bool result;
   } test_array[] = {
     { { "/somedir", "/someotherdir", NULL }, "somedir", true },
@@ -2600,6 +2572,7 @@ test_dir_matches_p()
     { { "/Tmp/has", NULL, NULL }, "/Tmp/has space", false },
     { { "/Tmp/has", NULL, NULL }, "/Tmp/has,comma", false },
   };
+  unsigned i;
 
   for (i = 0; i < countof(test_array); ++i)
     {
@@ -2613,4 +2586,3 @@ test_dir_matches_p()
 }
 
 #endif /* TESTING */
-

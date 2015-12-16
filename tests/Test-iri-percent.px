@@ -11,6 +11,8 @@ use HTTPTest;
 
 my $ccedilla_l15 = "\xE7";
 my $ccedilla_l15_pct = "%E7";
+my $ccedilla_u8 = "\xC3\xA7";
+my $ccedilla_u8_pct = "%C3%A7";
 my $eacute_l1 = "\xE9";
 my $eacute_u8 = "\xC3\xA9";
 my $eacute_u8_pct = "%C3%A9";
@@ -52,7 +54,7 @@ my %urls = (
         },
         content => $pageindex,
     },
-    "/hello_${ccedilla_l15_pct}${eacute_u8_pct}.html" => {
+    "/hello_${ccedilla_u8_pct}${eacute_u8_pct}.html" => {
         code => "200",
         msg => "Ok",
         headers => {
@@ -70,19 +72,17 @@ my %expected_downloaded_files = (
     'index.html' => {
         content => $pageindex,
     },
-    "hello_${ccedilla_l15}${eacute_u8}.html" => {
+    "hello_${ccedilla_u8}${eacute_u8}.html" => {
         content => $pagefrancais,
     },
 );
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-iri-percent",
-                              input => \%urls,
+my $the_test = HTTPTest->new (input => \%urls,
                               cmdline => $cmdline,
                               errcode => $expected_error_code,
                               output => \%expected_downloaded_files);
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

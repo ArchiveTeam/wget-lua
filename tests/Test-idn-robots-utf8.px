@@ -48,7 +48,7 @@ my %urls = (
     },
 );
 
-my $cmdline = $WgetTest::WGETPATH . " --iri -rH"
+my $cmdline = $WgetTest::WGETPATH . " --iri -r"
     . " -e http_proxy=localhost:{{port}} --local-encoding=UTF-8"
     . " http://$utf8_hostname/";
 
@@ -68,12 +68,10 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-idn-robots-utf8",
-                              input => \%urls,
+my $the_test = HTTPTest->new (input => \%urls,
                               cmdline => $cmdline,
                               errcode => $expected_error_code,
                               output => \%expected_downloaded_files);
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

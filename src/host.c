@@ -1,7 +1,7 @@
 /* Host name resolution and matching.
    Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004,
-   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012 Free Software Foundation,
-   Inc.
+   2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2015 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -56,6 +56,10 @@ as that of the covered work.  */
 #endif /* WINDOWS */
 
 #include <errno.h>
+
+#ifdef ENABLE_IRI
+#include <idn-free.h>
+#endif
 
 #include "utils.h"
 #include "host.h"
@@ -151,6 +155,13 @@ address_list_set_faulty (struct address_list *al, int index)
      "faulty" attempt is always preceded with all-faulty addresses,
      and this is how Wget uses it.  */
   assert (index == al->faulty);
+  if (index != al->faulty)
+    {
+      logprintf (LOG_ALWAYS, "index: %d\nal->faulty: %d\n", index, al->faulty);
+      logprintf (LOG_ALWAYS, _("Error in handling the address list.\n"));
+      logprintf (LOG_ALWAYS, _("Please report this issue to bug-wget@gnu.org\n"));
+      abort();
+    }
 
   ++al->faulty;
   if (al->faulty >= al->count)
@@ -309,7 +320,7 @@ address_list_release (struct address_list *al)
       address_list_delete (al);
     }
 }
-
+
 /* Versions of gethostbyname and getaddrinfo that support timeout. */
 
 #ifndef ENABLE_IPV6
@@ -408,7 +419,7 @@ getaddrinfo_with_timeout (const char *node, const char *service,
 }
 
 #endif /* ENABLE_IPV6 */
-
+
 /* Return a textual representation of ADDR, i.e. the dotted quad for
    IPv4 addresses, and the colon-separated list of hex words (with all
    zeros omitted, etc.) for IPv6 addresses.  */
@@ -570,7 +581,7 @@ is_valid_ipv6_address (const char *str, const char *end)
 
   return true;
 }
-
+
 /* Simple host cache, used by lookup_host to speed up resolving.  The
    cache doesn't handle TTL because Wget is a fairly short-lived
    application.  Refreshing is attempted when connect fails, though --
@@ -592,7 +603,7 @@ cache_query (const char *host)
   al = hash_table_get (host_name_addresses_map, host);
   if (al)
     {
-      DEBUGP (("Found %s in host_name_addresses_map (%p)\n", host, al));
+      DEBUGP (("Found %s in host_name_addresses_map (%p)\n", host, (void *) al));
       ++al->refcount;
       return al;
     }
@@ -637,7 +648,7 @@ cache_remove (const char *host)
       hash_table_remove (host_name_addresses_map, host);
     }
 }
-
+
 /* Look up HOST in DNS and return a list of IP addresses.
 
    This function caches its result so that, if the same host is passed
@@ -734,14 +745,13 @@ lookup_host (const char *host, int flags)
           str = xmalloc (len);
           snprintf (str, len, "%s (%s)", name, host);
           str[len-1] = '\0';
-          xfree (name);
+          idn_free (name);
         }
 
       logprintf (LOG_VERBOSE, _("Resolving %s... "),
                  quotearg_style (escape_quoting_style, str ? str : host));
 
-      if (str)
-        xfree (str);
+      xfree (str);
     }
 
 #ifdef ENABLE_IPV6
@@ -848,7 +858,7 @@ lookup_host (const char *host, int flags)
 
   return al;
 }
-
+
 /* Determine whether a URL is acceptable to be followed, according to
    a list of domains to accept.  */
 bool

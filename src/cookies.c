@@ -1,6 +1,6 @@
 /* Support for cookies.
    Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010, 2011 Free Software Foundation, Inc.
+   2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -51,11 +51,16 @@ as that of the covered work.  */
 #include <assert.h>
 #include <errno.h>
 #include <time.h>
+#ifdef HAVE_LIBPSL
+# include <libpsl.h>
+#endif
 #include "utils.h"
 #include "hash.h"
 #include "cookies.h"
 #include "http.h"               /* for http_atotm */
-
+#include "c-strcase.h"
+
+
 /* Declarations of `struct cookie' and the most basic functions. */
 
 /* Cookie jar serves as cookie storage and a means of retrieving
@@ -95,7 +100,7 @@ struct cookie {
   int port;                     /* port number */
   char *path;                   /* path prefix of the cookie */
 
-  unsigned discard_requested :1; /* whether cookie was created to
+  unsigned discard_requested :1;/* whether cookie was created to
                                    request discarding another
                                    cookie. */
 
@@ -148,13 +153,13 @@ cookie_expired_p (const struct cookie *c)
 static void
 delete_cookie (struct cookie *cookie)
 {
-  xfree_null (cookie->domain);
-  xfree_null (cookie->path);
-  xfree_null (cookie->attr);
-  xfree_null (cookie->value);
+  xfree (cookie->domain);
+  xfree (cookie->path);
+  xfree (cookie->attr);
+  xfree (cookie->value);
   xfree (cookie);
 }
-
+
 /* Functions for storing cookies.
 
    All cookies can be reached beginning with jar->chains.  The key in
@@ -299,7 +304,12 @@ discard_matching_cookie (struct cookie_jar *jar, struct cookie *cookie)
 
           res = hash_table_get_pair (jar->chains, victim->domain,
                                      &chain_key, NULL);
-          assert (res != 0);
+
+          if (res == 0)
+            {
+              logprintf (LOG_VERBOSE, _("Unable to get cookie for %s\n"),
+                         victim->domain);
+            }
           if (!victim->next)
             {
               /* VICTIM was the only cookie in the chain.  Destroy the
@@ -314,7 +324,7 @@ discard_matching_cookie (struct cookie_jar *jar, struct cookie *cookie)
       DEBUGP (("Discarded old cookie.\n"));
     }
 }
-
+
 /* Functions for parsing the `Set-Cookie' header, and creating new
    cookies from the wire.  */
 
@@ -346,7 +356,7 @@ parse_set_cookie (const char *set_cookie, bool silent)
   struct cookie *cookie = cookie_new ();
   param_token name, value;
 
-  if (!extract_param (&ptr, &name, &value, ';'))
+  if (!extract_param (&ptr, &name, &value, ';', NULL))
     goto error;
   if (!value.b)
     goto error;
@@ -360,13 +370,13 @@ parse_set_cookie (const char *set_cookie, bool silent)
   cookie->attr = strdupdelim (name.b, name.e);
   cookie->value = strdupdelim (value.b, value.e);
 
-  while (extract_param (&ptr, &name, &value, ';'))
+  while (extract_param (&ptr, &name, &value, ';', NULL))
     {
       if (TOKEN_IS (name, "domain"))
         {
           if (!TOKEN_NON_EMPTY (value))
             goto error;
-          xfree_null (cookie->domain);
+          xfree (cookie->domain);
           /* Strictly speaking, we should set cookie->domain_exact if the
              domain doesn't begin with a dot.  But many sites set the
              domain to "foo.com" and expect "subhost.foo.com" to get the
@@ -379,7 +389,7 @@ parse_set_cookie (const char *set_cookie, bool silent)
         {
           if (!TOKEN_NON_EMPTY (value))
             goto error;
-          xfree_null (cookie->path);
+          xfree (cookie->path);
           cookie->path = strdupdelim (value.b, value.e);
         }
       else if (TOKEN_IS (name, "expires"))
@@ -393,7 +403,7 @@ parse_set_cookie (const char *set_cookie, bool silent)
 
           /* Check if expiration spec is valid.
              If not, assume default (cookie doesn't expire, but valid only for
-	     this session.) */
+             this session.) */
           expires = http_atotm (value_copy);
           if (expires != (time_t) -1)
             {
@@ -453,16 +463,16 @@ parse_set_cookie (const char *set_cookie, bool silent)
 
 #undef TOKEN_IS
 #undef TOKEN_NON_EMPTY
-
+
 /* Sanity checks.  These are important, otherwise it is possible for
    mailcious attackers to destroy important cookie information and/or
    violate your privacy.  */
 
 
 #define REQUIRE_DIGITS(p) do {                  \
-  if (!c_isdigit (*p))                            \
+  if (!c_isdigit (*p))                          \
     return false;                               \
-  for (++p; c_isdigit (*p); p++)                  \
+  for (++p; c_isdigit (*p); p++)                \
     ;                                           \
 } while (0)
 
@@ -498,19 +508,61 @@ numeric_address_p (const char *addr)
 /* Check whether COOKIE_DOMAIN is an appropriate domain for HOST.
    Originally I tried to make the check compliant with rfc2109, but
    the sites deviated too often, so I had to fall back to "tail
-   matching", as defined by the original Netscape's cookie spec.  */
+   matching", as defined by the original Netscape's cookie spec.
+
+   Wget now uses libpsl to check domain names against a public suffix
+   list to see if they are valid. However, since we don't provide a
+   psl on our own, if libpsl is compiled without a public suffix list,
+   fall back to using the original "tail matching" heuristic. Also if
+   libpsl is unable to convert the domain to lowercase, which means that
+   it doesnt have any runtime conversion support, we again fall back to
+   "tail matching" since libpsl states the results are unpredictable with
+   upper case strings.
+   */
 
 static bool
 check_domain_match (const char *cookie_domain, const char *host)
 {
+
+#ifdef HAVE_LIBPSL
+  char *cookie_domain_lower = NULL;
+  char *host_lower = NULL;
+  const psl_ctx_t *psl;
+  int is_acceptable;
+
   DEBUGP (("cdm: 1"));
+  if (!(psl = psl_builtin()))
+    {
+      DEBUGP (("\nlibpsl not built with a public suffix list. "
+               "Falling back to simple heuristics.\n"));
+      goto no_psl;
+    }
 
-  /* Numeric address requires exact match.  It also requires HOST to
-     be an IP address.  */
-  if (numeric_address_p (cookie_domain))
-    return 0 == strcmp (cookie_domain, host);
+  if (psl_str_to_utf8lower (cookie_domain, NULL, NULL, &cookie_domain_lower) == PSL_SUCCESS &&
+      psl_str_to_utf8lower (host, NULL, NULL, &host_lower) == PSL_SUCCESS)
+    {
+      is_acceptable = psl_is_cookie_domain_acceptable (psl, host_lower, cookie_domain_lower);
+    }
+  else
+    {
+        DEBUGP (("libpsl unable to parse domain name. "
+                 "Falling back to simple heuristics.\n"));
+        goto no_psl;
+    }
 
-  DEBUGP ((" 2"));
+  xfree (cookie_domain_lower);
+  xfree (host_lower);
+
+  return is_acceptable == 1;
+
+no_psl:
+  /* Cleanup the PSL pointers first */
+  xfree (cookie_domain_lower);
+  xfree (host_lower);
+#endif
+
+  /* For efficiency make some elementary checks first */
+  DEBUGP (("cdm: 2"));
 
   /* For the sake of efficiency, check for exact match first. */
   if (0 == strcasecmp (cookie_domain, host))
@@ -647,7 +699,7 @@ check_path_match (const char *cookie_path, const char *path)
   s = PS_newstr;                                                \
 } while (0)
 
-
+
 /* Process the HTTP `Set-Cookie' header.  This results in storing the
    cookie or discarding a matching one, or ignoring it completely, all
    depending on the contents.  */
@@ -731,7 +783,7 @@ cookie_handle_set_cookie (struct cookie_jar *jar,
   if (cookie)
     delete_cookie (cookie);
 }
-
+
 /* Support for sending out cookies in HTTP requests, based on
    previously stored cookies.  Entry point is
    `build_cookies_request'.  */
@@ -1062,7 +1114,7 @@ cookie_header (struct cookie_jar *jar, const char *host,
   assert (pos == result_size);
   return result;
 }
-
+
 /* Support for loading and saving cookies.  The format used for
    loading and saving should be the format of the `cookies.txt' file
    used by Netscape and Mozilla, at least the Unix versions.
@@ -1129,7 +1181,9 @@ domain_port (const char *domain_b, const char *domain_e,
 void
 cookie_jar_load (struct cookie_jar *jar, const char *file)
 {
-  char *line;
+  char *line = NULL;
+  size_t bufsize = 0;
+
   FILE *fp = fopen (file, "r");
   if (!fp)
     {
@@ -1137,9 +1191,10 @@ cookie_jar_load (struct cookie_jar *jar, const char *file)
                  quote (file), strerror (errno));
       return;
     }
+
   cookies_now = time (NULL);
 
-  for (; ((line = read_whole_line (fp)) != NULL); xfree (line))
+  while (getline (&line, &bufsize, fp) > 0)
     {
       struct cookie *cookie;
       char *p = line;
@@ -1233,6 +1288,8 @@ cookie_jar_load (struct cookie_jar *jar, const char *file)
     abort_cookie:
       delete_cookie (cookie);
     }
+
+  xfree(line);
   fclose (fp);
 }
 
@@ -1296,7 +1353,7 @@ cookie_jar_save (struct cookie_jar *jar, const char *file)
 
   DEBUGP (("Done saving cookies.\n"));
 }
-
+
 /* Clean up cookie-related data. */
 
 void
@@ -1319,7 +1376,7 @@ cookie_jar_delete (struct cookie_jar *jar)
   hash_table_destroy (jar->chains);
   xfree (jar);
 }
-
+
 /* Test cases.  Currently this is only tests parse_set_cookies.  To
    use, recompile Wget with -DTEST_COOKIES and call test_cookies()
    from main.  */
@@ -1372,7 +1429,7 @@ test_cookies (void)
         param_token name, value;
         const char *ptr = data;
         int j = 0;
-        while (extract_param (&ptr, &name, &value, ';'))
+        while (extract_param (&ptr, &name, &value, ';', NULL))
           {
             char *n = strdupdelim (name.b, name.e);
             char *v = strdupdelim (value.b, value.e);
@@ -1388,8 +1445,8 @@ test_cookies (void)
               printf ("Invalid value %d for '%s' (expected '%s', got '%s')\n",
                       j / 2 + 1, data, expected[j + 1], v);
             j += 2;
-            free (n);
-            free (v);
+            xfree (n);
+            xfree (v);
           }
         if (expected[j])
           printf ("Too few parameters for '%s'\n", data);

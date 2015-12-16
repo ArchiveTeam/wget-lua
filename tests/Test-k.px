@@ -25,7 +25,7 @@ my $converted = <<EOF;
     <title>Index</title>
   </head>
   <body>
-    <a href="site%3Bsub:.html">Site</a>
+    <a href="./site%3Bsub:.html">Site</a>
   </body>
 </html>
 EOF
@@ -76,12 +76,10 @@ my %expected_downloaded_files = (
 
 ###############################################################################
 
-my $the_test = HTTPTest->new (name => "Test-k",
-                              input => \%urls,
+my $the_test = HTTPTest->new (input => \%urls,
                               cmdline => $cmdline,
                               errcode => $expected_error_code,
                               output => \%expected_downloaded_files);
 exit $the_test->run();
 
 # vim: et ts=4 sw=4
-

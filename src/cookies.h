@@ -1,6 +1,6 @@
 /* Support for cookies.
    Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-   2010, 2011 Free Software Foundation, Inc.
+   2010, 2011, 2015 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -37,9 +37,9 @@ struct cookie_jar *cookie_jar_new (void);
 void cookie_jar_delete (struct cookie_jar *);
 
 void cookie_handle_set_cookie (struct cookie_jar *, const char *, int,
-			       const char *, const char *);
+                               const char *, const char *);
 char *cookie_header (struct cookie_jar *, const char *, int,
-		     const char *, bool);
+                     const char *, bool);
 
 void cookie_jar_load (struct cookie_jar *, const char *);
 void cookie_jar_save (struct cookie_jar *, const char *);

@@ -100,7 +100,7 @@ EOC
 EOC
             }
                 print $fh <<EOC;
-#else 
+#else
   "-$name",
 #endif
 
@@ -137,3 +137,4 @@ __DATA__
 
 #include "wget.h"
 #include <stdio.h>
+#include "version.h"

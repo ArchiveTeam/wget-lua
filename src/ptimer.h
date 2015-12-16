@@ -1,6 +1,6 @@
 /* Declarations for ptimer.c.
-   Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software
-   Foundation, Inc.
+   Copyright (C) 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2015 Free
+   Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -31,7 +31,7 @@ as that of the covered work.  */
 #ifndef PTIMER_H
 #define PTIMER_H
 
-struct ptimer;			/* forward declaration; all struct
+struct ptimer;                  /* forward declaration; all struct
                                    members are private */
 
 struct ptimer *ptimer_new (void);

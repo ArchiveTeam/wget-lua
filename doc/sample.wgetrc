@@ -5,7 +5,10 @@
 ## You can use this file to change the default behaviour of wget or to
 ## avoid having to type many many command-line options. This file does
 ## not contain a comprehensive list of commands -- look at the manual
-## to find out what you can put into this file.
+## to find out what you can put into this file. You can find this here:
+##   $ info wget.info 'Startup File'
+## Or online here:
+##   https://www.gnu.org/software/wget/manual/wget.html#Startup-File
 ##
 ## Wget initialization file can reside in /usr/local/etc/wgetrc
 ## (global, for all users) or $HOME/.wgetrc (for a single user).
@@ -13,6 +16,9 @@
 ## To use the settings in this file, you will have to uncomment them,
 ## as well as change them, in most cases, as the values on the
 ## commented-out lines are the default values (e.g. "off").
+##
+## Command are case-, underscore- and minus-insensitive.
+## For example ftp_proxy, ftp-proxy and ftpproxy are the same.
 
 
 ##
@@ -119,7 +125,13 @@
 #iri = off
 
 # Force the default system encoding
-#locale = UTF-8
+#localencoding = UTF-8
 
 # Force the default remote server encoding
 #remoteencoding = UTF-8
+
+# Turn on to prevent following non-HTTPS links when in recursive mode
+#httpsonly = off
+
+# Tune HTTPS security (auto, SSLv2, SSLv3, TLSv1, PFS)
+#secureprotocol = auto
