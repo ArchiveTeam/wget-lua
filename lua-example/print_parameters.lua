@@ -9,8 +9,8 @@ wget.callbacks.httploop_result = function(url, err, http_stat)
   return wget.actions.NOTHING
 end
 
-wget.callbacks.download_child_p = function(urlpos, parent, depth, start_url_parsed, iri, verdict)
-  print(table.show({urlpos=urlpos, parent=parent, depth=depth, start_url_parsed=start_url_parsed, iri=iri, verdict=verdict}, "download_child_p"))
+wget.callbacks.download_child = function(urlpos, parent, depth, start_url_parsed, iri, verdict, reason)
+  print(table.show({urlpos=urlpos, parent=parent, depth=depth, start_url_parsed=start_url_parsed, iri=iri, verdict=verdict, reason=reason}, "download_child"))
   return verdict
 end
 
