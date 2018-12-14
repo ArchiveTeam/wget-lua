@@ -60,6 +60,7 @@ as that of the covered work.  */
 #include "url.h"
 #include "hash.h"
 #include "ptimer.h"
+#include "luahooks.h"
 
 #ifndef NO_ADDRESS
 # define NO_ADDRESS NO_DATA
@@ -314,6 +315,26 @@ address_list_release (struct address_list *al)
       DEBUGP (("Deleting unused 0x%0*lx.\n", PTR_FORMAT (al)));
       address_list_delete (al);
     }
+}
+
+/* Rotates the addresses on the list.  */
+void
+address_list_rotate (struct address_list *al)
+{
+  int count, i;
+  ip_address tmp;
+  ip_address *addresses;
+
+  count = al->count;
+  addresses = al->addresses;
+
+  if (count >= 2)
+  {
+    memcpy (&tmp, &addresses[0], sizeof (ip_address));
+    for (i = 0; i < count - 1; i++)
+      memcpy (&addresses[i], &addresses[i+1], sizeof (ip_address));
+    memcpy (&addresses[count - 1], &tmp, sizeof (ip_address));
+  }
 }
 
 /* Versions of gethostbyname and getaddrinfo that support timeout. */
@@ -781,6 +802,11 @@ lookup_host (const char *host, int flags)
   bool numeric_address = false;
   double timeout = opt.dns_timeout;
 
+  /* Allow the Lua script to override the hostname. */
+  const char *alternative_host = luahooks_lookup_host (host);
+  if (alternative_host)
+    host = alternative_host;
+
 #ifndef ENABLE_IPV6
   /* If we're not using getaddrinfo, first check if HOST specifies a
      numeric IPv4 address.  Some implementations of gethostbyname
@@ -828,7 +854,11 @@ lookup_host (const char *host, int flags)
         {
           al = cache_query (host);
           if (al)
-            return al;
+            {
+              if (opt.rotate_dns)
+                address_list_rotate (al);
+              return al;
+            }
         }
       else
         cache_remove (host);

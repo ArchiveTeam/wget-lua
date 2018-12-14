@@ -77,4 +77,24 @@ void set_local_file (const char **, const char *);
 
 bool input_file_url (const char *);
 
+#define SUSPEND_METHOD do {                     \
+  method_suspended = true;                      \
+  saved_body_data = opt.body_data;              \
+  saved_body_file_name = opt.body_file;         \
+  saved_method = opt.method;                    \
+  opt.body_data = NULL;                         \
+  opt.body_file = NULL;                         \
+  opt.method = NULL;                            \
+} while (0)
+
+#define RESTORE_METHOD do {                             \
+  if (method_suspended)                                 \
+    {                                                   \
+      opt.body_data = saved_body_data;                  \
+      opt.body_file = saved_body_file_name;             \
+      opt.method = saved_method;                        \
+      method_suspended = false;                         \
+    }                                                   \
+} while (0)
+
 #endif /* RETR_H */

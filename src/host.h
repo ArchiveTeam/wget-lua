@@ -90,6 +90,7 @@ void address_list_set_faulty (struct address_list *, int);
 void address_list_set_connected (struct address_list *);
 bool address_list_connected_p (const struct address_list *);
 void address_list_release (struct address_list *);
+void address_list_rotate (struct address_list *);
 
 const char *print_address (const ip_address *);
 #ifdef ENABLE_IPV6

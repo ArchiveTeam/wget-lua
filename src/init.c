@@ -252,6 +252,9 @@ static const struct {
   { "localencoding",    &opt.locale,            cmd_string },
   { "logfile",          &opt.lfilename,         cmd_file },
   { "login",            &opt.ftp_user,          cmd_string },/* deprecated*/
+#ifdef ENABLE_LUA
+  { "luafilename",      &opt.lua_filename,      cmd_file },
+#endif
   { "maxredirect",      &opt.max_redirect,      cmd_number },
 #ifdef HAVE_METALINK
   { "metalinkindex",    &opt.metalink_index,     cmd_number_inf },
@@ -313,6 +316,7 @@ static const struct {
   { "retryonhosterror", &opt.retry_on_host_error, cmd_boolean },
   { "retryonhttperror", &opt.retry_on_http_error, cmd_string },
   { "robots",           &opt.use_robots,        cmd_boolean },
+  { "rotatedns",        &opt.rotate_dns,        cmd_boolean },
   { "savecookies",      &opt.cookies_output,    cmd_file },
   { "saveheaders",      &opt.save_headers,      cmd_boolean },
 #ifdef HAVE_SSL
@@ -328,6 +332,7 @@ static const struct {
   { "timeout",          NULL,                   cmd_spec_timeout },
   { "timestamping",     &opt.timestamping,      cmd_boolean },
   { "tries",            &opt.ntry,              cmd_number_inf },
+  { "truncateoutput",   &opt.truncate_output_document, cmd_boolean },
   { "trustservernames", &opt.trustservernames,  cmd_boolean },
   { "unlink",           &opt.unlink_requested,  cmd_boolean },
   { "useaskpass" ,      &opt.use_askpass,       cmd_use_askpass },
@@ -484,6 +489,8 @@ defaults (void)
 
   opt.useservertimestamps = true;
   opt.show_all_dns_entries = false;
+
+  opt.truncate_output_document = false;
 
   opt.warc_maxsize = 0; /* 1024 * 1024 * 1024; */
 #ifdef HAVE_LIBZ

@@ -108,6 +108,7 @@ struct options
   char **domains;               /* See host.c */
   char **exclude_domains;
   bool dns_cache;               /* whether we cache DNS lookups. */
+  bool rotate_dns;              /* Whether the DNS address list should be rotated after each request.  */
 
   char **follow_tags;           /* List of HTML tags to recursively follow. */
   char **ignore_tags;           /* List of HTML tags to ignore if recursing. */
@@ -116,6 +117,8 @@ struct options
                                    retrieving? */
   bool retr_symlinks;           /* Whether we retrieve symlinks in
                                    FTP. */
+  bool truncate_output_document;/* The output file will be truncated before
+                                   each new download. */
   char *output_document;        /* The output file to which the
                                    documents will be printed.  */
   char *warc_filename;          /* WARC output filename */
@@ -326,6 +329,11 @@ struct options
 
   bool show_all_dns_entries;    /* Show all the DNS entries when resolving a
                                    name. */
+
+#ifdef ENABLE_LUA
+  char *lua_filename;		        /* Lua script filename */
+#endif
+
   bool report_bps;              /*Output bandwidth in bits format*/
 
 #ifdef HAVE_LIBZ

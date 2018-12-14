@@ -55,6 +55,7 @@ as that of the covered work.  */
 #include "http.h"               /* for save_cookies */
 #include "hsts.h"               /* for initializing hsts_store to NULL */
 #include "ptimer.h"
+#include "luahooks.h"
 #include "warc.h"
 #include "version.h"
 #include "c-strcase.h"
@@ -365,6 +366,7 @@ static struct cmdline_option option_data[] =
     { "limit-rate", 0, OPT_VALUE, "limitrate", -1 },
     { "load-cookies", 0, OPT_VALUE, "loadcookies", -1 },
     { "local-encoding", 0, OPT_VALUE, "localencoding", -1 },
+    { "lua-script", 0, OPT_VALUE, "luafilename", -1 },
     { "rejected-log", 0, OPT_VALUE, "rejectedlog", -1 },
     { "max-redirect", 0, OPT_VALUE, "maxredirect", -1 },
 #ifdef HAVE_METALINK
@@ -422,6 +424,7 @@ static struct cmdline_option option_data[] =
     { "retry-connrefused", 0, OPT_BOOLEAN, "retryconnrefused", -1 },
     { "retry-on-host-error", 0, OPT_BOOLEAN, "retryonhosterror", -1 },
     { "retry-on-http-error", 0, OPT_VALUE, "retryonhttperror", -1 },
+    { "rotate-dns", 0, OPT_BOOLEAN, "rotatedns", -1 },
     { "save-cookies", 0, OPT_VALUE, "savecookies", -1 },
     { "save-headers", 0, OPT_BOOLEAN, "saveheaders", -1 },
     { IF_SSL ("secure-protocol"), 0, OPT_VALUE, "secureprotocol", -1 },
@@ -434,6 +437,7 @@ static struct cmdline_option option_data[] =
     { "timestamping", 'N', OPT_BOOLEAN, "timestamping", -1 },
     { "if-modified-since", 0, OPT_BOOLEAN, "ifmodifiedsince", -1 },
     { "tries", 't', OPT_VALUE, "tries", -1 },
+    { "truncate-output", 0, OPT_BOOLEAN, "truncateoutput", -1 },
     { "unlink", 0, OPT_BOOLEAN, "unlink", -1 },
     { "trust-server-names", 0, OPT_BOOLEAN, "trustservernames", -1 },
     { "use-askpass", 0, OPT_VALUE, "useaskpass", -1},
@@ -602,6 +606,8 @@ Startup:\n"),
   -b,  --background                go to background after startup\n"),
     N_("\
   -e,  --execute=COMMAND           execute a `.wgetrc'-style command\n"),
+    N_("\
+       --lua-script=FILE           load the Lua script from FILE\n"),
     "\n",
 
     N_("\
@@ -709,6 +715,8 @@ Download:\n"),
        --bind-address=ADDRESS      bind to ADDRESS (hostname or IP) on local host\n"),
     N_("\
        --limit-rate=RATE           limit download rate to RATE\n"),
+    N_("\
+       --rotate-dns                use a different IP for each request.\n"),
     N_("\
        --no-dns-cache              disable caching DNS lookups\n"),
     N_("\
@@ -1602,6 +1610,13 @@ main (int argc, char **argv)
       opt.noclobber = false;
     }
 
+  if (opt.rotate_dns && !opt.dns_cache)
+    {
+      fprintf (stderr,
+               _("--rotate-dns has no effect if it is combined with "
+                 "--no-dns-cache.\n"));
+    }
+
   if (opt.reclevel == 0)
       opt.reclevel = INFINITE_RECURSION; /* see recur.h for commentary */
 
@@ -1661,8 +1676,8 @@ with -p or -r. See the manual for details.\n\n"), stderr);
           print_usage (1);
           exit (WGET_EXIT_GENERIC_ERROR);
         }
-      if (opt.page_requisites
-          || opt.recursive)
+      if ((opt.page_requisites || opt.recursive)
+          && !opt.truncate_output_document)
         {
           logprintf (LOG_NOTQUIET, "%s", _("\
 WARNING: combining -O with -r or -p will mean that all downloaded content\n\
@@ -1954,6 +1969,8 @@ for details.\n\n"));
   if (opt.warc_filename != 0)
     warc_init ();
 
+  luahooks_init ();
+
   DEBUGP (("DEBUG output created by Wget %s on %s.\n\n",
            version_string, OS_TYPE));
 
@@ -2138,7 +2155,7 @@ only if outputting to a regular file.\n"));
           if (opt.use_askpass)
             use_askpass (url_parsed);
 
-          if ((opt.recursive || opt.page_requisites)
+          if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
               && ((url_scheme (*t) != SCHEME_FTP
 #ifdef HAVE_SSL
               && url_scheme (*t) != SCHEME_FTPS
@@ -2247,6 +2264,9 @@ only if outputting to a regular file.\n"));
   if (opt.recursive && opt.spider)
     print_broken_links ();
 
+  double end_time = ptimer_measure (timer);
+  ptimer_destroy (timer);
+
   /* Print the downloaded sum.  */
   if ((opt.recursive || opt.page_requisites
        || nurl > 1
@@ -2254,7 +2274,6 @@ only if outputting to a regular file.\n"));
       &&
       total_downloaded_bytes != 0)
     {
-      double end_time = ptimer_measure (timer);
       char *wall_time = xstrdup (secs_to_human_time (end_time - start_time));
       char *download_time = xstrdup (secs_to_human_time (total_download_time));
 
@@ -2292,7 +2311,15 @@ only if outputting to a regular file.\n"));
 
   cleanup ();
 
-  exit (get_exit_status ());
+  luahooks_finish (start_time, end_time,
+                   numurls, total_downloaded_bytes, total_download_time);
+
+  int exit_status = get_exit_status ();
+
+  /* The Lua script can change the exit status.  */
+  exit_status = luahooks_before_exit (exit_status);
+
+  exit (exit_status);
 }
 
 /*

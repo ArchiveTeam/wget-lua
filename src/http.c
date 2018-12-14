@@ -59,6 +59,7 @@ as that of the covered work.  */
 #include "md5.h"
 #include "convert.h"
 #include "spider.h"
+#include "luahooks.h"
 #include "warc.h"
 #include "c-strcase.h"
 #include "version.h"
@@ -80,7 +81,6 @@ as that of the covered work.  */
 
 
 /* Forward decls. */
-struct http_stat;
 static char *create_authorization_line (const char *, const char *,
                                         const char *, const char *,
                                         const char *, bool *, uerr_t *);
@@ -4100,6 +4100,22 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
       goto cleanup;
     }
+  else
+    {
+      fp = output_stream;
+      if (opt.truncate_output_document)
+        {
+          rewind (fp);
+          if (ftruncate (fileno (fp), 0) == -1)
+            {
+              logprintf (LOG_NOTQUIET, "Could not truncate output file: %s\n", strerror (errno));
+              CLOSE_INVALIDATE (sock); 
+              xfree (head); 
+              xfree (type);
+              return FOPENERR; 
+            }
+        }
+    }
 
   err = open_output_stream (hs, count, &fp);
   if (err != RETROK)
@@ -4322,7 +4338,10 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
         *dt &= ~HEAD_ONLY;
 
       /* Decide whether or not to restart.  */
-      if (force_full_retrieve)
+      if (opt.warc_filename != NULL)
+        /* Always download the complete file. */
+        hstat.restval = 0;
+      else if (force_full_retrieve)
         hstat.restval = hstat.len;
       else if (opt.start_pos >= 0)
         hstat.restval = opt.start_pos;
@@ -4361,6 +4380,21 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
       /* Get the new location (with or without the redirection).  */
       if (hstat.newloc)
         *newloc = xstrdup (hstat.newloc);
+
+      luahook_action_t action = luahooks_httploop_result (u, err, &hstat);
+      switch (action)
+        {
+          case LUAHOOK_NOTHING:
+            break;
+          case LUAHOOK_CONTINUE:
+            if (pconn_active)
+              invalidate_persistent();
+            continue;
+          case LUAHOOK_EXIT:
+            goto exit;
+          case LUAHOOK_ABORT:
+            abort();
+        }
 
       switch (err)
         {

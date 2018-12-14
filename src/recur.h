@@ -45,4 +45,12 @@ struct urlpos;
 void recursive_cleanup (void);
 uerr_t retrieve_tree (struct url *, struct iri *);
 
+typedef enum
+{
+  WG_RR_SUCCESS, WG_RR_BLACKLIST, WG_RR_NOTHTTPS, WG_RR_NONHTTP, WG_RR_ABSOLUTE,
+  WG_RR_DOMAIN, WG_RR_PARENT, WG_RR_LIST, WG_RR_REGEX, WG_RR_RULES,
+  WG_RR_SPANNEDHOST, WG_RR_ROBOTS, WG_RR_LUAHOOK
+} reject_reason;
+
+
 #endif /* RECUR_H */

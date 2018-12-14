@@ -815,6 +815,31 @@ fi
 test "X${ENABLE_XATTR}" = "Xyes" && AC_DEFINE([ENABLE_XATTR], 1,
     [Define if you want file meta-data storing into POSIX Extended Attributes compiled in.])
 
+dnl
+dnl Check for Lua
+dnl
+
+AC_CHECK_HEADER(lua.h,
+                AC_CHECK_LIB(lua, lua_newstate,
+                  [LIBS="${LIBS} -lm -ldl -llua"
+                   AC_DEFINE([ENABLE_LUA], 1,
+                             [Define if Lua is available.])
+                  ], [
+                   AC_MSG_ERROR([lua not found])
+                  ], -lm),
+                AC_CHECK_HEADER(lua5.1/lua.h,
+                  AC_CHECK_LIB(lua5.1, lua_newstate,
+                    [LIBS="${LIBS} -lm -ldl -llua5.1"
+                     CPPFLAGS="${CPPFLAGS} -I/usr/include/lua5.1"
+                     AC_DEFINE([ENABLE_LUA], 1,
+                               [Define if Lua is available.])
+                    ], [
+                     AC_MSG_ERROR([lua not found])
+                    ], -lm),
+                  AC_MSG_ERROR([lua not found])
+                )
+)
+ 
 dnl Needed by src/Makefile.am
 AM_CONDITIONAL([IRI_IS_ENABLED], [test "X$iri" != "Xno"])
 AM_CONDITIONAL([WITH_SSL], [test "X$with_ssl" != "Xno"])

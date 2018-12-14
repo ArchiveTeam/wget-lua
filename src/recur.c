@@ -38,6 +38,7 @@ as that of the covered work.  */
 
 #include "url.h"
 #include "recur.h"
+#include "luahooks.h"
 #include "utils.h"
 #include "retr.h"
 #include "ftp.h"
@@ -48,6 +49,7 @@ as that of the covered work.  */
 #include "html-url.h"
 #include "css-url.h"
 #include "spider.h"
+#include "luahooks.h"
 #include "exits.h"
 
 /* Functions for maintaining the URL queue.  */
@@ -61,6 +63,8 @@ struct queue_element {
   struct iri *iri;                /* sXXXav */
   bool css_allowed;             /* whether the document is allowed to
                                    be treated as CSS. */
+  const char *body_data;        /* POST query string */
+  const char *method;           /* HTTP method */
   struct queue_element *next;   /* next element in queue */
 };
 
@@ -94,7 +98,8 @@ url_queue_delete (struct url_queue *queue)
 static void
 url_enqueue (struct url_queue *queue, struct iri *i,
              const char *url, const char *referer, int depth,
-             bool html_allowed, bool css_allowed)
+             bool html_allowed, bool css_allowed,
+             const char *body_data, const char *method)
 {
   struct queue_element *qel = xnew (struct queue_element);
   qel->iri = i;
@@ -103,6 +108,8 @@ url_enqueue (struct url_queue *queue, struct iri *i,
   qel->depth = depth;
   qel->html_allowed = html_allowed;
   qel->css_allowed = css_allowed;
+  qel->body_data = body_data;
+  qel->method = method;
   qel->next = NULL;
 
   ++queue->count;
@@ -131,7 +138,8 @@ url_enqueue (struct url_queue *queue, struct iri *i,
 static bool
 url_dequeue (struct url_queue *queue, struct iri **i,
              const char **url, const char **referer, int *depth,
-             bool *html_allowed, bool *css_allowed)
+             bool *html_allowed, bool *css_allowed, const char **body_data,
+             const char **method)
 {
   struct queue_element *qel = queue->head;
 
@@ -148,6 +156,8 @@ url_dequeue (struct url_queue *queue, struct iri **i,
   *depth = qel->depth;
   *html_allowed = qel->html_allowed;
   *css_allowed = qel->css_allowed;
+  *body_data = qel->body_data;
+  *method = qel->method;
 
   --queue->count;
 
@@ -179,13 +189,6 @@ static int blacklist_contains (struct hash_table *blacklist, const char *url)
 
   return ret;
 }
-
-typedef enum
-{
-  WG_RR_SUCCESS, WG_RR_BLACKLIST, WG_RR_NOTHTTPS, WG_RR_NONHTTP, WG_RR_ABSOLUTE,
-  WG_RR_DOMAIN, WG_RR_PARENT, WG_RR_LIST, WG_RR_REGEX, WG_RR_RULES,
-  WG_RR_SPANNEDHOST, WG_RR_ROBOTS
-} reject_reason;
 
 static reject_reason download_child (const struct urlpos *, struct url *, int,
                               struct url *, struct hash_table *, struct iri *);
@@ -252,7 +255,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
   /* Enqueue the starting URL.  Use start_url_parsed->url rather than
      just URL so we enqueue the canonical form of the URL.  */
   url_enqueue (queue, i, xstrdup (start_url_parsed->url), NULL, 0, true,
-               false);
+               false, NULL, NULL);
   blacklist_add (blacklist, start_url_parsed->url);
 
   if (opt.rejected_log)
@@ -269,8 +272,15 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       char *url, *referer, *file = NULL;
       int depth;
       bool html_allowed, css_allowed;
+      char *body_data = NULL;
+      char *method = NULL;
       bool is_css = false;
       bool dash_p_leaf_HTML = false;
+
+      bool method_suspended = false;
+      char *saved_body_data = NULL;
+      char *saved_body_file_name = NULL;
+      char *saved_method = NULL;
 
       if (opt.quota && total_downloaded_bytes > opt.quota)
         break;
@@ -281,7 +291,9 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
 
       if (!url_dequeue (queue, (struct iri **) &i,
                         (const char **)&url, (const char **)&referer,
-                        &depth, &html_allowed, &css_allowed))
+                        &depth, &html_allowed, &css_allowed,
+                        (const char **)&body_data,
+                        (const char **)&method))
         break;
 
       /* ...and download it.  Note that this download is in most cases
@@ -292,7 +304,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
          and again under URL2, but at a different (possibly smaller)
          depth, we want the URL's children to be taken into account
          the second time.  */
-      if (dl_url_file_map && hash_table_contains (dl_url_file_map, url))
+      if (dl_url_file_map && hash_table_contains (dl_url_file_map, url)
+          && body_data == NULL)
         {
           bool is_css_bool;
 
@@ -328,8 +341,21 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
           else
             {
 
+              if (body_data)
+                {
+                  SUSPEND_METHOD;
+                  opt.body_data = body_data;
+                  opt.body_file = NULL;
+                  opt.method = method;
+                }
+
               status = retrieve_url (url_parsed, url, &file, &redirected, referer,
                                      &dt, false, i, true);
+
+              opt.body_data = NULL;
+              opt.body_file = NULL;
+              opt.method = NULL;
+              RESTORE_METHOD;
 
               if (html_allowed && file && status == RETROK
                   && (dt & RETROKF) && (dt & TEXTHTML))
@@ -417,7 +443,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       /* If the downloaded document was HTML or CSS, parse it and enqueue the
          links it contains. */
 
-      if (descend)
+      if (descend && (opt.recursive || opt.page_requisites))
         {
           bool meta_disallow_follow = false;
           struct urlpos *children
@@ -474,7 +500,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                       url_enqueue (queue, ci, xstrdup (child->url->url),
                                    xstrdup (referer_url), depth + 1,
                                    child->link_expect_html,
-                                   child->link_expect_css);
+                                   child->link_expect_css,
+                                   NULL, NULL);
                       /* We blacklist the URL we have enqueued, because we
                          don't want to enqueue (and hence download) the
                          same URL twice.  */
@@ -491,6 +518,35 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
               url_free (url_parsed);
               free_urlpos (children);
             }
+        }
+
+      struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
+      struct luahooks_url *lh_url = luahooks_urls;
+      while (lh_url != NULL)
+        {
+          if (lh_url->body_data || ! string_set_contains (blacklist, lh_url->url))
+            {
+              DEBUGP (("Add url from Lua-script: %s\n", lh_url->url));
+              struct iri *ci;
+              char *referer_url = url;
+              ci = iri_new ();
+              set_uri_encoding (ci, i->content_encoding, false);
+              /* We do not increment depth, so page_requisites still works. */
+              url_enqueue (queue, ci, xstrdup (lh_url->url),
+                           xstrdup (referer_url), depth,
+                           lh_url->link_expect_html,
+                           lh_url->link_expect_css,
+                           lh_url->body_data,
+                           lh_url->method);
+              /* We blacklist the URL we have enqueued, because we
+                 don't want to enqueue (and hence download) the
+                 same URL twice.  */
+              string_set_add (blacklist, lh_url->url);
+            }
+          
+          struct luahooks_url *next_lh_url = lh_url->next;
+          free (lh_url);
+          lh_url = next_lh_url;
         }
 
       if (file
@@ -520,6 +576,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       xfree (url);
       xfree (referer);
       xfree (file);
+      xfree (body_data);
+      xfree (method);
       iri_free (i);
     }
 
@@ -532,16 +590,19 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
   /* If anything is left of the queue due to a premature exit, free it
      now.  */
   {
-    char *d1, *d2;
+    char *d1, *d2, *d7, *d8;
     int d3;
     bool d4, d5;
     struct iri *d6;
     while (url_dequeue (queue, (struct iri **)&d6,
-                        (const char **)&d1, (const char **)&d2, &d3, &d4, &d5))
+                        (const char **)&d1, (const char **)&d2, &d3, &d4,
+                        &d5, (const char **)&d7, (const char **)&d8))
       {
         iri_free (d6);
         xfree (d1);
         xfree (d2);
+        xfree (d7);
+        xfree (d8);
       }
   }
   url_queue_delete (queue);
@@ -573,6 +634,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
   const char *url = u->url;
   bool u_scheme_like_http;
   reject_reason reason = WG_RR_SUCCESS;
+  bool lua_verdict;
 
   DEBUGP (("Deciding whether to enqueue \"%s\".\n", url));
 
@@ -776,6 +838,15 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
     }
 
   out:
+
+  /* Allow Lua hooks to change the result. */
+  lua_verdict = luahooks_download_child (upos, parent, depth, start_url_parsed,
+                                         iri, reason);
+
+  if (lua_verdict)
+    reason = WG_RR_SUCCESS;
+  else if (reason == WG_RR_SUCCESS)
+    reason = WG_RR_LUAHOOK;
 
   if (reason == WG_RR_SUCCESS)
     /* The URL has passed all the tests.  It can be placed in the
