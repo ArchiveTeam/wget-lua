@@ -32,6 +32,16 @@ as that of the covered work.  */
 
 #include "hsts.h"
 
+typedef enum
+{
+  ENC_INVALID = -1,             /* invalid encoding */
+  ENC_NONE = 0,                 /* no special encoding */
+  ENC_GZIP,                     /* gzip compression */
+  ENC_DEFLATE,                  /* deflate compression */
+  ENC_COMPRESS,                 /* compress compression */
+  ENC_BROTLI                    /* brotli compression */
+} encoding_t;
+
 struct url;
 struct http_stat
 {
@@ -63,6 +73,11 @@ struct http_stat
 #ifdef HAVE_METALINK
   metalink_t *metalink;
 #endif
+
+  encoding_t local_encoding;    /* the encoding of the local file */
+  encoding_t remote_encoding;   /* the encoding of the remote file */
+
+  bool temporary;               /* downloading a temporary file */
 };
 
 uerr_t http_loop (const struct url *, struct url *, char **, char **, const char *,
