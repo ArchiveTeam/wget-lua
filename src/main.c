@@ -2264,9 +2264,6 @@ only if outputting to a regular file.\n"));
   if (opt.recursive && opt.spider)
     print_broken_links ();
 
-  double end_time = ptimer_measure (timer);
-  ptimer_destroy (timer);
-
   /* Print the downloaded sum.  */
   if ((opt.recursive || opt.page_requisites
        || nurl > 1
@@ -2274,6 +2271,8 @@ only if outputting to a regular file.\n"));
       &&
       total_downloaded_bytes != 0)
     {
+
+      double end_time = ptimer_measure (timer);
       char *wall_time = xstrdup (secs_to_human_time (end_time - start_time));
       char *download_time = xstrdup (secs_to_human_time (total_download_time));
 
