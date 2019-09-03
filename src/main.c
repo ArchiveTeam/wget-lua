@@ -1,5 +1,5 @@
 /* Command line parsing.
-   Copyright (C) 1996-2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 1996-2015, 2018-2019 Free Software Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -763,7 +763,7 @@ Download:\n"),
 #endif
 #ifdef ENABLE_XATTR
     N_("\
-       --no-xattr                  turn off storage of metadata in extended file attributes\n"),
+       --xattr                     turn on storage of metadata in extended file attributes\n"),
 #endif
     "\n",
 

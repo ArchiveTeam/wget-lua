@@ -1,5 +1,6 @@
 /* URL handling.
-   Copyright (C) 1996-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 1996-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -1462,14 +1463,18 @@ append_uri_pathel (const char *b, const char *e, bool escaped,
 {
   const char *p;
   int quoted, outlen;
-
   int mask;
+
+  if (!dest)
+    return;
+
   if (opt.restrict_files_os == restrict_unix)
     mask = filechr_not_unix;
   else if (opt.restrict_files_os == restrict_vms)
     mask = filechr_not_vms;
   else
     mask = filechr_not_windows;
+
   if (opt.restrict_files_ctrl)
     mask |= filechr_control;
 

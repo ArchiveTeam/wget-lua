@@ -1,5 +1,6 @@
 # Makefile for `wget' utility
-# Copyright (C) 1995-2011, 2015, 2018 Free Software Foundation, Inc.
+# Copyright (C) 1995-2011, 2015, 2018-2019 Free Software Foundation,
+# Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -66,7 +67,7 @@ LDADD = $(LIBOBJS) ../lib/libgnu.a $(GETADDRINFO_LIB) $(HOSTENT_LIB)\
  $(LIB_NANOSLEEP) $(LIB_POSIX_SPAWN) $(LIB_SELECT) $(LIBICONV) $(LIBINTL)\
  $(LIBTHREAD) $(LIBUNISTRING) $(SERVENT_LIB)
 AM_CPPFLAGS = -I$(top_builddir)/lib -I$(top_srcdir)/lib
-
+AM_CFLAGS = $(WERROR_CFLAGS) $(WARN_CFLAGS)
 
 ../lib/libgnu.a:
 	cd ../lib && $(MAKE) $(AM_MAKEFLAGS)

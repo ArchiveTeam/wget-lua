@@ -1,11 +1,29 @@
 GNU Wget NEWS -- history of user-visible changes.
 
-Copyright (C) 1997-2018 Free Software Foundation, Inc.
+Copyright (C) 1997-2019 Free Software Foundation, Inc.
 See the end for copying conditions.
 
 Please send GNU Wget bug reports to <bug-wget@gnu.org>.
 
-* Changes in Wget X.YY
+* Changes in Wget 1.20.3
+
+** Fixed a buffer overflow vulnerability
+
+
+* Changes in Wget 1.20.2
+
+** NTLM authentication will retry under certain cases
+
+
+* Changes in Wget 1.20.1
+
+** --xattr is no longer default since it introduces privacy issues.
+
+** --xattr saves the Referer as scheme/host/port, user/pw/path/query/fragment
+   are no longer saved to prevent privacy issues.
+
+** --xattr saves the Original URL without user/password to prevent
+   privacy issues.
 
 
 * Changes in Wget 1.20

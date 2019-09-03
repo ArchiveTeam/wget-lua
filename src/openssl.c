@@ -1,5 +1,6 @@
 /* SSL support via OpenSSL library.
-   Copyright (C) 2000-2012, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2000-2012, 2015, 2018-2019 Free Software Foundation,
+   Inc.
    Originally contributed by Christian Fraenkel.
 
 This file is part of GNU Wget.
@@ -173,7 +174,9 @@ ssl_init (void)
 #if OPENSSL_VERSION_NUMBER >= 0x00907000
   if (ssl_true_initialized == 0)
     {
-#if OPENSSL_API_COMPAT < 0x10100000L
+#if !defined(LIBRESSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x10100000L)
+      OPENSSL_init_ssl (OPENSSL_INIT_LOAD_CONFIG | OPENSSL_INIT_ENGINE_ALL_BUILTIN, NULL);
+#else
       OPENSSL_config (NULL);
 #endif
       ssl_true_initialized = 1;
@@ -193,21 +196,9 @@ ssl_init (void)
       goto error;
     }
 
-#if OPENSSL_VERSION_NUMBER >= 0x00907000
-  OPENSSL_load_builtin_modules();
-#ifndef OPENSSL_NO_ENGINE
-  ENGINE_load_builtin_engines();
-#endif
-  CONF_modules_load_file(NULL, NULL,
-      CONF_MFLAGS_DEFAULT_SECTION|CONF_MFLAGS_IGNORE_MISSING_FILE);
-#endif
-#if OPENSSL_API_COMPAT >= 0x10100000L
-  OPENSSL_init_ssl(0, NULL);
-#else
+#if defined(LIBRESSL_VERSION_NUMBER) || (OPENSSL_VERSION_NUMBER < 0x10100000L)
   SSL_library_init ();
   SSL_load_error_strings ();
-#endif
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
   SSLeay_add_all_algorithms ();
   SSLeay_add_ssl_algorithms ();
 #endif
@@ -294,6 +285,12 @@ ssl_init (void)
   if (ssl_options)
     SSL_CTX_set_options (ssl_ctx, ssl_options);
 
+#if ((OPENSSL_VERSION_NUMBER >= 0x10101000L) && \
+     !defined(LIBRESSL_VERSION_NUMBER) && \
+     !defined(OPENSSL_IS_BORINGSSL))
+     SSL_CTX_set_post_handshake_auth (ssl_ctx, 1);
+#endif
+
 #if !defined(LIBRESSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x10100000L)
   if (ssl_proto_version)
     SSL_CTX_set_min_proto_version(ssl_ctx, ssl_proto_version);
@@ -326,6 +323,37 @@ ssl_init (void)
 
   SSL_CTX_set_default_verify_paths (ssl_ctx);
   SSL_CTX_load_verify_locations (ssl_ctx, opt.ca_cert, opt.ca_directory);
+
+#ifdef X509_V_FLAG_PARTIAL_CHAIN
+  /* Set X509_V_FLAG_PARTIAL_CHAIN to allow the client to anchor trust in
+   * a non-self-signed certificate. This defies RFC 4158 (Path Building)
+   * which defines a trust anchor in terms of a self-signed certificate.
+   * However, it substantially reduces attack surface by pruning the tree
+   * of unneeded trust points. For example, the cross-certified
+   * Let's Encrypt X3 CA, which protects gnu.org and appears as an
+   * intermediate CA to clients, can be used as a trust anchor without
+   * the entire IdentTrust PKI.
+   */
+  X509_VERIFY_PARAM *param = X509_VERIFY_PARAM_new();
+  if (param)
+    {
+      /* We only want X509_V_FLAG_PARTIAL_CHAIN, but the OpenSSL docs
+       * say to use X509_V_FLAG_TRUSTED_FIRST also. It looks like
+       * X509_V_FLAG_TRUSTED_FIRST applies to a collection of trust
+       * anchors and not a single trust anchor.
+       */
+      (void) X509_VERIFY_PARAM_set_flags (param, X509_V_FLAG_TRUSTED_FIRST | X509_V_FLAG_PARTIAL_CHAIN);
+      if (SSL_CTX_set1_param (ssl_ctx, param) == 0)
+        logprintf(LOG_NOTQUIET, _("OpenSSL: Failed set trust to partial chain\n"));
+      /* We continue on error */
+      X509_VERIFY_PARAM_free (param);
+    }
+  else
+    {
+      logprintf(LOG_NOTQUIET, _("OpenSSL: Failed to allocate verification param\n"));
+      /* We continue on error */
+    }
+#endif
 
   if (opt.crl_file)
     {

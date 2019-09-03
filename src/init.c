@@ -1,6 +1,6 @@
 /* Reading/parsing the initialization file.
-   Copyright (C) 1996-2012, 2014-2015, 2018 Free Software Foundation,
-   Inc.
+   Copyright (C) 1996-2012, 2014-2015, 2018-2019 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -514,11 +514,7 @@ defaults (void)
   opt.hsts = true;
 #endif
 
-#ifdef ENABLE_XATTR
-  opt.enable_xattr = true;
-#else
   opt.enable_xattr = false;
-#endif
 }
 
 /* Return the user's home directory (strdup-ed), or NULL if none is
@@ -2016,7 +2012,9 @@ cleanup (void)
 
   xfree (opt.encoding_remote);
   xfree (opt.locale);
+#ifdef HAVE_HSTS
   xfree (opt.hsts_file);
+#endif
 
   xfree (opt.wgetrcfile);
   xfree (opt.homedir);

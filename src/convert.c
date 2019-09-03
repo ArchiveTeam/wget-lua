@@ -1,6 +1,6 @@
 /* Conversion of links to local files.
-   Copyright (C) 2003-2011, 2014-2015, 2018 Free Software Foundation,
-   Inc.
+   Copyright (C) 2003-2011, 2014-2015, 2018-2019 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -255,9 +255,9 @@ convert_links (const char *file, struct urlpos *links)
     write_backup_file (file, downloaded_file_return);
 
   /* Before opening the file for writing, unlink the file.  This is
-     important if the data in FM is mmaped.  In such case, nulling the
+     important if the data in FM is mapped.  In such case, nulling the
      file, which is what fopen() below does, would make us read all
-     zeroes from the mmaped region.  */
+     zeroes from the mapped region.  */
   if (unlink (file) < 0 && errno != ENOENT)
     {
       logprintf (LOG_NOTQUIET, _("Unable to delete %s: %s\n"),
@@ -486,7 +486,7 @@ convert_basename (const char *p, const struct urlpos *link)
 {
   int len = link->size;
   char *url = NULL;
-  char *org_basename = NULL, *local_basename = NULL;
+  char *org_basename = NULL, *local_basename;
   char *result = NULL;
 
   if (*p == '"' || *p == '\'')
@@ -503,7 +503,7 @@ convert_basename (const char *p, const struct urlpos *link)
   else
     org_basename = url;
 
-  local_basename = strrchr (link->local_name, '/');
+  local_basename = link->local_name ? strrchr (link->local_name, '/') : NULL;
   if (local_basename)
     local_basename++;
   else

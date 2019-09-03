@@ -1,5 +1,6 @@
 /* Parsing FTP `ls' output.
-   Copyright (C) 1996-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 1996-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -856,8 +857,7 @@ ftp_parse_vms_ls (FILE *fp)
             {
               /* Date. */
               DEBUGP (("Date.\n"));
-              strcpy( date_str, tok);
-              strcat( date_str, " ");
+				  snprintf(date_str, sizeof(date_str), "%s ", tok);
             }
           else if ((strlen (tok) < 12) && (strchr( tok, ':') != NULL))
             {
@@ -994,7 +994,7 @@ ftp_parse_vms_ls (FILE *fp)
 
 /* This function switches between the correct parsing routine depending on
    the SYSTEM_TYPE. The system type should be based on the result of the
-   "SYST" response of the FTP server. According to this repsonse we will
+   "SYST" response of the FTP server. According to this response we will
    use on of the three different listing parsers that cover the most of FTP
    servers used nowadays.  */
 

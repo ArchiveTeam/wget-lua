@@ -1,5 +1,6 @@
 /* Support for cookies.
-   Copyright (C) 2001-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2001-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -900,7 +901,7 @@ path_matches (const char *full_path, const char *prefix)
   return len + 1;
 }
 
-/* Return true iff COOKIE matches the provided parameters of the URL
+/* Return true if COOKIE matches the provided parameters of the URL
    being downloaded: HOST, PORT, PATH, and SECFLAG.
 
    If PATH_GOODNESS is non-NULL, store the "path goodness" value

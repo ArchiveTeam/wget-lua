@@ -1,5 +1,5 @@
 dnl Template file for GNU Autoconf
-dnl Copyright (C) 1995-1997, 2001, 2007-2014, 2018 Free Software
+dnl Copyright (C) 1995-1997, 2001, 2007-2014, 2018-2019 Free Software
 dnl Foundation, Inc.
 
 dnl This program is free software; you can redistribute it and/or modify
@@ -48,10 +48,10 @@ AC_CONFIG_SRCDIR([src/wget.h])
 dnl
 dnl Automake setup
 dnl
-AM_INIT_AUTOMAKE([1.9])
+AM_INIT_AUTOMAKE([subdir-objects])
 
 dnl
-dnl Get cannonical host
+dnl Get canonical host
 dnl
 AC_CANONICAL_HOST
 AC_DEFINE_UNQUOTED([OS_TYPE], "$host_os",
@@ -93,15 +93,69 @@ AC_ARG_ENABLE([fuzzing],
    AC_SUBST([LIB_FUZZING_ENGINE])
    AC_DEFINE([FUZZING], 1, [Define to 1 if this is a fuzzing build])
   ], [enable_fuzzing=no; LIB_FUZZING_ENGINE=""])
-#FUZZ_LIBS=$LIBS
-#if test $enable_fuzzing = "yes"; then
-#  OLD_LIBS=$LIBS
-#  AC_SEARCH_LIBS([dlsym], [dl dld])
-#  FUZZ_LIBS=$LIBS
-#  LIBS=$OLD_LIBS
-#fi
-#AC_SUBST([FUZZ_LIBS])
 AM_CONDITIONAL([FUZZING], [test "$enable_fuzzing" = "yes"])
+
+dnl needed for some fuzzers
+OLD_LIBS="$LIBS"
+AC_SEARCH_LIBS([dlopen], [dl dld])
+if [[ "${ac_cv_search_dlopen#-l}" != "${ac_cv_search_dlopen}" ]]; then
+  FUZZ_LIBS="${ac_cv_search_dlopen}"
+  AC_SUBST([FUZZ_LIBS])
+fi
+LIBS="$OLD_LIBS"
+
+
+AC_ARG_ENABLE([fsanitize-ubsan],
+  [AS_HELP_STRING([--enable-fsanitize-ubsan], [Turn on Undefined Behavior Sanitizer (for developers)])],
+  [gl_cc_sanitize_ubsan=yes], [gl_cc_sanitize_ubsan=no])
+
+AC_ARG_ENABLE([fsanitize-asan],
+  [AS_HELP_STRING([--enable-fsanitize-asan], [Turn on Address Sanitizer (for developers) (mutually exclusive with Memory/Thread sanitizer or Valgrind tests)])],
+  [gl_cc_sanitize_asan=yes], [gl_cc_sanitize_asan=no])
+
+AC_ARG_ENABLE([fsanitize-msan],
+  [AS_HELP_STRING([--enable-fsanitize-msan], [Turn on Memory Sanitizer (for developers) (mutually exclusive with Address/Thread sanitizer or Valgrind tests)])],
+  [gl_cc_sanitize_msan=yes], [gl_cc_sanitize_msan=no])
+
+if test "$gl_cc_sanitize_asan" = yes; then
+  if test "$gl_cc_sanitize_msan" = yes; then
+    AC_MSG_ERROR([Address Sanitizer and Memory Sanitizer are mutually exclusive])
+  fi
+fi
+
+if test "$gl_cc_sanitize_ubsan" = yes; then
+  gl_WARN_ADD([-fsanitize=undefined])
+  gl_WARN_ADD([-fno-sanitize-recover=undefined])
+
+  # additional clang options
+  gl_WARN_ADD([-fsanitize=integer])
+  gl_WARN_ADD([-fsanitize=nullability])
+  gl_WARN_ADD([-fno-sanitize-recover=integer])
+  gl_WARN_ADD([-fno-sanitize-recover=nullability])
+fi
+
+if test "$gl_cc_sanitize_asan" = yes; then
+  gl_WARN_ADD([-fsanitize=address])
+  gl_WARN_ADD([-fno-omit-frame-pointer])
+
+  # additional clang option
+  gl_WARN_ADD([-fsanitize-address-use-after-scope])
+fi
+
+if test "$gl_cc_sanitize_msan" = yes; then
+  # clang options
+  gl_WARN_ADD([-fsanitize=memory])
+  gl_WARN_ADD([-fsanitize-memory-track-origins])
+
+  # gcc options
+  if test "$CCNAME" = "gcc"; then
+    gl_WARN_ADD([-fsanitize=leak])
+  fi
+
+  gl_WARN_ADD([-fno-omit-frame-pointer])
+  gl_WARN_ADD([-fPIE])
+fi
+
 
 dnl Opie: Support for opie s/key FTP logins
 AC_ARG_ENABLE([opie],
@@ -155,6 +209,12 @@ AC_ARG_ENABLE(valgrind-tests,
 AS_IF([test "x$ENABLE_VALGRIND" != xno], [
   AC_CHECK_PROG(HAVE_VALGRIND, valgrind, yes, no)
   AS_IF([test "x$HAVE_VALGRIND" = xyes], [
+    if test "$gl_cc_sanitize_asan" = yes; then
+      AC_MSG_ERROR([Valgrind and Address Sanitizer are mutually exclusive])
+    elif test "$gl_cc_sanitize_msan" = yes; then
+      AC_MSG_ERROR([Valgrind and Memory Sanitizer are mutually exclusive])
+    fi
+
     VALGRIND_TESTS="1"
     AC_SUBST(VALGRIND_TESTS)
     VALGRIND_INFO="Test suite will be run under Valgrind"
@@ -200,7 +260,7 @@ dnl
 dnl Gettext
 dnl
 AM_GNU_GETTEXT([external],[need-ngettext])
-AM_GNU_GETTEXT_VERSION([0.17])
+AM_GNU_GETTEXT_VERSION([0.19.3])
 
 AC_PROG_RANLIB
 
@@ -281,7 +341,8 @@ AC_CHECK_TYPES(sig_atomic_t, [], [], [
 #include <signal.h>
 ])
 
-# gnulib
+# gnulib, AM_ICONV should be placed before gl_INIT
+AM_ICONV
 gl_INIT
 
 dnl
@@ -313,6 +374,113 @@ case $host_os in
     AC_LIBOBJ([mswindows])
     ;;
 esac
+
+# enable all possible compiler warnings in WARN_FLAGS
+#
+# to enable by default: create a file '.manywarnings'
+# enable explicitly : ./configure --enable-manywarnings
+# disable explicitly: ./configure --disable-manywarnings
+sanitizer_flags="$WARN_CFLAGS"
+wget_MANYWARNINGS(WARN_CFLAGS, C)
+WARN_CFLAGS="$WARN_CFLAGS $sanitizer_flags"
+
+if test -n "$WARN_CFLAGS"; then
+  if test "$CCNAME" = "gcc"; then
+    # Set up list of unwanted warnings
+    nw=
+    nw="$nw -Wsystem-headers"       # System headers may trigger lot's of useless warnings
+    nw="$nw -Wvla"                  # This project is C99
+    nw="$nw -Wstack-protector"
+    nw="$nw -Wmissing-field-initializer"
+    nw="$nw -Wtraditional"
+    nw="$nw -Wtraditional-conversion"
+    nw="$nw -Wc++-compat"
+    nw="$nw -Wcast-qual"
+    nw="$nw -Wconversion"
+    nw="$nw -Wsign-conversion"
+    nw="$nw -Wunsuffixed-float-constants"
+    nw="$nw -Wdeclaration-after-statement" # C89 only, messing up gcc < 5
+    nw="$nw -Wcast-function-type" # gcc 8, very noisy
+    nw="$nw -Wabi" # gcc 8, very noisy
+    nw="$nw -Wunused-macros" # triggers in auto-generated lex css parser, #pragma doesn't work, conflicts with -Werror
+    if test "$cross_compiling" = yes; then
+      nw="$nw -Wformat"
+    fi
+
+    # remove unwanted warn flags
+    wget_WORD_REMOVE([WARN_CFLAGS], [$WARN_CFLAGS], [$nw])
+
+    # add more flags as you like
+    if test $GCC_VERSION -ge 5; then
+      WARN_CFLAGS="$WARN_CFLAGS -fdiagnostics-color=always"
+    fi
+    if test "$cross_compiling" = yes; then
+      WARN_CFLAGS="$WARN_CFLAGS -Wno-format"
+    fi
+    if test $GCC_VERSION -ge 8; then
+      WARN_CFLAGS="$WARN_CFLAGS -Wno-cast-function-type"
+    fi
+    # WARN_CFLAGS="$WARN_CFLAGS -Werror"
+
+    # We use a slightly smaller set of warning options for lib/.
+    # Remove the following and save the result in GNULIB_WARN_CFLAGS.
+    # Removing is not enough if these switches are implicitly set by other
+    #  flags like -Wall or -Wextra. We have to explicitly unset them
+    #  with -Wno-....
+    nw=
+    nw="$nw -Wpedantic"
+    nw="$nw -Wsign-compare"
+    nw="$nw -Wunused-parameter"
+    nw="$nw -Wswitch-default"
+    nw="$nw -Wformat-nonliteral"
+    nw="$nw -Wsuggest-attribute=pure"
+    nw="$nw -Wunsafe-loop-optimizations"
+    nw="$nw -Wundef"
+    nw="$nw -Wswitch-enum"
+    nw="$nw -Wbad-function-cast"
+    nw="$nw -Wredundant-decls"
+    nw="$nw -Werror"
+    wget_WORD_REMOVE([GNULIB_WARN_CFLAGS], [$WARN_CFLAGS], [$nw])
+    wget_WORD_REMOVE([CFLAGS], [$CFLAGS], [-Werror])
+
+    # disable options implicitly set by other options
+    GNULIB_WARN_CFLAGS="-Wno-error $GNULIB_WARN_CFLAGS"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-sign-compare -Wno-unused-parameter -Wno-alloca"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-float-conversion -Wno-cast-function-type"
+    if test "$cross_compiling" = yes; then
+      GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-incompatible-pointer-types"
+    fi
+
+  elif test "$CCNAME" = "clang"; then
+    # setup flags for this project
+    WARN_CFLAGS="$WARN_CFLAGS -Wno-system-headers -Wno-vla -Wno-cast-qual -Wno-padded"
+    WARN_CFLAGS="$WARN_CFLAGS -Wno-reserved-id-macro -Wno-sign-conversion  -Wno-disabled-macro-expansion"
+    WARN_CFLAGS="$WARN_CFLAGS -Wno-documentation -Wno-documentation-unknown-command"
+    WARN_CFLAGS="$WARN_CFLAGS -Wno-covered-switch-default -Wno-unused-macros"
+    WARN_CFLAGS="$WARN_CFLAGS -Wno-missing-field-initializers"
+
+    # remove all flags from WARN_FLAGS that are already in CFLAGS
+    # wget_WORD_REMOVE([WARN_CFLAGS], [$WARN_CFLAGS], [$CFLAGS])
+
+    wget_WORD_REMOVE([CFLAGS], [$CFLAGS], [-Werror])
+
+    # disable verbose options
+    GNULIB_WARN_CFLAGS="-Wno-error $GNULIB_WARN_CFLAGS"
+    GNULIB_WARN_CFLAGS="$WARN_CFLAGS -Wno-sign-compare -Wno-unused-parameter -Wno-undef -Wno-format-nonliteral"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-conversion -Wno-disabled-macro-expansion -Wno-c++98-compat"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-gnu-statement-expression -Wno-shorten-64-to-32 -Wno-switch-enum"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-unused-macros -Wno-missing-field-initializers"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-gnu-zero-variadic-macro-arguments -Wno-conditional-uninitialized"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-comma -Wno-assign-enum -Wno-unreachable-code -Wno-error"
+    GNULIB_WARN_CFLAGS="$GNULIB_WARN_CFLAGS -Wno-missing-field-initializers"
+
+    # remove all flags from GNULIB_WARN_FLAGS that are already in CFLAGS
+    # wget_WORD_REMOVE([GNULIB_WARN_CFLAGS], [$GNULIB_WARN_CFLAGS], [$CFLAGS])
+  fi
+
+  AC_SUBST([WARN_CFLAGS])
+  AC_SUBST([GNULIB_WARN_CFLAGS])
+fi
 
 
 dnl
@@ -618,8 +786,6 @@ AC_ARG_ENABLE(iri,
 )
 
 AS_IF([test "X$iri" != "Xno"],[
-  AM_ICONV
-
   if test "X$am_cv_func_iconv" != "Xyes"; then
     iri=no
     if test "X$force_iri" = "Xyes"; then
@@ -862,7 +1028,7 @@ AC_MSG_NOTICE([Summary of build options:
   Host OS:           $host_os
   Install prefix:    $prefix
   Compiler:          $CC
-  CFlags:            $CFLAGS $CPPFLAGS
+  CFlags:            $CFLAGS $CPPFLAGS $WARN_CFLAGS
   LDFlags:           $LDFLAGS
   Libs:              $LIBS
   SSL:               $with_ssl

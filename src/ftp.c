@@ -1,6 +1,6 @@
 /* File Transfer Protocol support.
-   Copyright (C) 1996-2011, 2014-2015, 2018 Free Software Foundation,
-   Inc.
+   Copyright (C) 1996-2011, 2014-2015, 2018-2019 Free Software
+   Foundation, Inc.
 
 This file is part of GNU Wget.
 
@@ -1580,7 +1580,7 @@ Error in server response, closing control connection.\n"));
 
 #ifdef ENABLE_XATTR
   if (opt.enable_xattr)
-    set_file_metadata (u->url, NULL, fp);
+    set_file_metadata (u, NULL, fp);
 #endif
 
   fd_close (local_sock);

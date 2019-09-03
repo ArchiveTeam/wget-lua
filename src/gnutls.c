@@ -1,5 +1,6 @@
 /* SSL support via GnuTLS library.
-   Copyright (C) 2005-2012, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2005-2012, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -784,7 +785,7 @@ ssl_connect_wget (int fd, const char *hostname, int *continue_session)
       err = gnutls_priority_set_direct (session, opt.tls_ciphers_string, NULL);
 #else
       logprintf (LOG_NOTQUIET, _("GnuTLS: Cannot set prio string directly. Falling back to default priority.\n"));
-      err = gnutls_set_default_priority ();
+      err = gnutls_set_default_priority (session);
 #endif
     }
 

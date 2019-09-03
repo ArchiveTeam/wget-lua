@@ -1,5 +1,6 @@
 /* Utility functions for writing WARC files.
-   Copyright (C) 2011-2012, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2011-2012, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -490,7 +491,7 @@ warc_sha1_stream_with_payload (FILE *stream, void *res_block, void *res_payload,
 
           if (n == 0)
             {
-              /* Check for the error flag IFF N == 0, so that we don't
+              /* Check for the error flag IF N == 0, so that we don't
                  exit the loop after a partial read due to e.g., EAGAIN
                  or EWOULDBLOCK.  */
               if (ferror (stream))

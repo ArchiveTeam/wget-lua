@@ -1,5 +1,6 @@
 /* Various utility functions.
-   Copyright (C) 1996-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 1996-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -616,7 +617,7 @@ file_non_directory_p (const char *path)
 }
 
 /* Return the size of file named by FILENAME, or -1 if it cannot be
-   opened or seeked into. */
+   opened or sought into. */
 wgint
 file_size (const char *filename)
 {

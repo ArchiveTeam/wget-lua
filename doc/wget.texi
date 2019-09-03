@@ -31,8 +31,8 @@ This file documents the GNU Wget utility for downloading network
 data.
 
 @c man begin COPYRIGHT
-Copyright @copyright{} 1996-2011, 2015, 2018 Free Software Foundation,
-Inc.
+Copyright @copyright{} 1996-2011, 2015, 2018-2019 Free Software
+Foundation, Inc.
 
 @iftex
 Permission is granted to make and distribute verbatim copies of
@@ -540,6 +540,14 @@ right NUMBER.
 Set preferred location for Metalink resources. This has effect if multiple
 resources with same priority are available.
 
+@cindex xattr
+@item --xattr
+Enable use of file system's extended attributes to save the
+original URL and the Referer HTTP header value if used.
+
+Be aware that the URL might contain private information like
+access tokens or credentials.
+
 
 @cindex force html
 @item -F
@@ -855,7 +863,7 @@ files.  In such a case, wget could simply be invoked with this parameter to get
 a much cleaner output on the screen.
 
 This option will also force the progress bar to be printed to @file{stderr} when
-used alongside the @samp{--logfile} option.
+used alongside the @samp{--output-file} option.
 
 @item -N
 @itemx --timestamping
@@ -1394,10 +1402,10 @@ to the inability of server-side scripts to cope with the connections.
 @cindex cache
 @item --no-cache
 Disable server-side cache.  In this case, Wget will send the remote
-server an appropriate directive (@samp{Pragma: no-cache}) to get the
-file from the remote service, rather than returning the cached version.
-This is especially useful for retrieving and flushing out-of-date
-documents on proxy servers.
+server appropriate directives (@samp{Cache-Control: no-cache} and
+@samp{Pragma: no-cache}) to get the file from the remote service,
+rather than returning the cached version. This is especially useful
+for retrieving and flushing out-of-date documents on proxy servers.
 
 Caching is allowed by default.
 
@@ -1809,7 +1817,7 @@ Set the cipher list string. Typically this string sets the
 cipher suites and other SSL/TLS options that the user wish should be used, in a
 set order of preference (GnuTLS calls it 'priority string'). This string
 will be fed verbatim to the SSL/TLS engine (OpenSSL or GnuTLS) and hence
-its format and syntax is dependant on that. Wget will not process or manipulate it
+its format and syntax is dependent on that. Wget will not process or manipulate it
 in any way. Refer to the OpenSSL or GnuTLS documentation for more information.
 
 @cindex SSL certificate, check
@@ -1983,7 +1991,7 @@ from the database.
 
 If you supply your own HSTS database via @samp{--hsts-file}, be aware that Wget
 may modify the provided file if any change occurs between the HSTS policies
-requested by the remote servers and those in the file. When Wget exists,
+requested by the remote servers and those in the file. When Wget exits,
 it effectively updates the HSTS database by rewriting the database file with the new entries.
 
 If the supplied file does not exist, Wget will create one. This file will contain the new HSTS
@@ -1997,7 +2005,7 @@ the same time over the HSTS database. Before dumping the updated HSTS entries
 on the file, Wget will re-read it and merge the changes.
 
 Using a custom HSTS database and/or modifying an existing one is discouraged.
-For more information about the potential security threats arised from such practice,
+For more information about the potential security threats arose from such practice,
 see section 14 "Security Considerations" of RFC 6797, specially section 14.9
 "Creative Manipulation of HSTS Policy Store".
 @end table
@@ -4190,7 +4198,7 @@ from the debug log before sending it to the bug address.  The
 @code{-d} won't go out of its way to collect sensitive information,
 but the log @emph{will} contain a fairly complete transcript of Wget's
 communication with the server, which may include passwords and pieces
-of downloaded data.  Since the bug address is publically archived, you
+of downloaded data.  Since the bug address is publicly archived, you
 may assume that all bug reports are visible to the public.
 
 @item
@@ -4439,7 +4447,7 @@ Tomislav Petrović, Mario Mikočević---many bug reports and
 suggestions.
 
 @item
-François Pinard---many thorough bug reports and discussions.
+Françis Pinard---many thorough bug reports and discussions.
 
 @item
 Karl Eichwalder---lots of help with internationalization, Makefile

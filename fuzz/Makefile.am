@@ -1,4 +1,4 @@
-AM_CFLAGS = $(WERROR_CFLAGS) $(WARN_CFLAGS) -Wno-unused-parameter -Wno-pedantic
+AM_CFLAGS = $(WERROR_CFLAGS) $(WARN_CFLAGS)
 AM_CPPFLAGS = -I$(top_srcdir)/src -I$(srcdir) -I$(top_builddir)/lib -I$(top_srcdir)/lib \
  -DSRCDIR=\"$(abs_srcdir)\"
 LDADD = ../lib/libgnu.a \
@@ -6,7 +6,7 @@ LDADD = ../lib/libgnu.a \
  $(LIBSOCKET) $(LIB_CLOCK_GETTIME) $(LIB_CRYPTO) $(LIB_GETLOGIN) $(LIB_NANOSLEEP) $(LIB_POLL) \
  $(LIB_POSIX_SPAWN) $(LIB_PTHREAD_SIGMASK) $(LIB_SELECT) $(LIBICONV) $(LIBINTL) \
  $(LIBMULTITHREAD) $(LIBTHREAD) $(SERVENT_LIB) @INTL_MACOSX_LIBS@ \
- -ldl
+ $(FUZZ_LIBS)
 
 WGET_TESTS = \
  wget_css_fuzzer$(EXEEXT) \
@@ -16,7 +16,8 @@ WGET_TESTS = \
  wget_netrc_fuzzer$(EXEEXT) \
  wget_options_fuzzer$(EXEEXT) \
  wget_robots_fuzzer$(EXEEXT) \
- wget_url_fuzzer$(EXEEXT)
+ wget_url_fuzzer$(EXEEXT) \
+ wget_read_hunk_fuzzer$(EXEEXT)
 
 if FUZZING
   bin_PROGRAMS = $(WGET_TESTS)
@@ -60,6 +61,9 @@ wget_robots_fuzzer_LDADD = ../src/libunittest.a $(LDADD)
 wget_url_fuzzer_SOURCES = wget_url_fuzzer.c $(MAIN)
 wget_url_fuzzer_LDADD = ../src/libunittest.a $(LDADD)
 
+wget_read_hunk_fuzzer_SOURCES = wget_read_hunk_fuzzer.c $(MAIN)
+wget_read_hunk_fuzzer_LDADD = ../src/libunittest.a $(LDADD)
+
 #EXTRA_DIST = $(wildcard *.options) $(wildcard *.dict) \
 # $(wildcard *.in) $(wildcard *.repro)
 
@@ -74,7 +78,7 @@ clean-local:
 
 oss-fuzz:
 	if test "$$OUT" != ""; then \
-	XLIBS="-lpsl -lgnutls -lnettle -lhogweed -lidn2 -lunistring"; \
+	XLIBS="-lpsl -lgnutls -lhogweed -lnettle -lidn2 -lunistring"; \
 	for ccfile in wget*_fuzzer.c; do \
 	fuzzer=$$(basename $$ccfile .c); \
 	$$CXX $$CXXFLAGS -I$(top_srcdir)/src -I$(top_srcdir) -I$(top_srcdir)/lib \

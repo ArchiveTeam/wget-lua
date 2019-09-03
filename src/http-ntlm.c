@@ -1,5 +1,6 @@
 /* NTLM code.
-   Copyright (C) 2005-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2005-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
    Contributed by Daniel Stenberg.
 
 This file is part of GNU Wget.
@@ -135,13 +136,24 @@ ntlm_input (struct ntlmdata *ntlm, const char *header)
     }
   else
     {
-      if (ntlm->state >= NTLMSTATE_TYPE1)
+      if (ntlm->state == NTLMSTATE_LAST)
+        {
+          DEBUGP (("NTLM auth restarted.\n"));
+          /* no return, continue */
+        }
+      else if (ntlm->state == NTLMSTATE_TYPE3)
+        {
+          DEBUGP (("NTLM handshake rejected.\n"));
+          ntlm->state = NTLMSTATE_NONE;
+          return false;
+        }
+      else if (ntlm->state >= NTLMSTATE_TYPE1)
         {
           DEBUGP (("Unexpected empty NTLM message.\n"));
           return false; /* this is an error */
         }
 
-      DEBUGP (("Empty NTLM message, starting transaction.\n"));
+      DEBUGP (("Empty NTLM message, (re)starting transaction.\n"));
       ntlm->state = NTLMSTATE_TYPE1; /* we should sent away a type-1 */
     }
 

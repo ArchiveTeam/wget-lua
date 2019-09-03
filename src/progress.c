@@ -1,5 +1,6 @@
 /* Download progress.
-   Copyright (C) 2001-2011, 2015, 2018 Free Software Foundation, Inc.
+   Copyright (C) 2001-2011, 2015, 2018-2019 Free Software Foundation,
+   Inc.
 
 This file is part of GNU Wget.
 
@@ -736,7 +737,7 @@ update_speed_ring (struct bar_progress *bp, wgint howmuch, double dltime)
   if (bp->stalled)
     {
       bp->stalled = false;
-      /* "recent_age" includes the entired stalled period, which
+      /* "recent_age" includes the entire stalled period, which
          could be very long.  Don't update the speed ring with that
          value because the current bandwidth would start too small.
          Start with an arbitrary (but more reasonable) time value and
