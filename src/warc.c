@@ -279,9 +279,9 @@ warc_write_header_uri (const char *name, const char *value)
   if (value)
     {
       warc_write_string (name);
-      warc_write_string (": <");
+      warc_write_string (": ");
       warc_write_string (value);
-      warc_write_string (">\r\n");
+      warc_write_string ("\r\n");
     }
   return warc_write_ok;
 }
