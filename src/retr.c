@@ -59,6 +59,7 @@ as that of the covered work.  */
 #include "ptimer.h"
 #include "html-url.h"
 #include "iri.h"
+#include "luahooks.h"
 #include "hsts.h"
 
 /* Total size of downloaded files.  Used to enforce quota.  */
@@ -840,27 +841,6 @@ calc_rate (wgint bytes, double secs, int *units)
   return dlrate;
 }
 
-
-#define SUSPEND_METHOD do {                     \
-  method_suspended = true;                      \
-  saved_body_data = opt.body_data;              \
-  saved_body_file_name = opt.body_file;         \
-  saved_method = opt.method;                    \
-  opt.body_data = NULL;                         \
-  opt.body_file = NULL;                         \
-  opt.method = NULL;                            \
-} while (0)
-
-#define RESTORE_METHOD do {                             \
-  if (method_suspended)                                 \
-    {                                                   \
-      opt.body_data = saved_body_data;                  \
-      opt.body_file = saved_body_file_name;             \
-      opt.method = saved_method;                        \
-      method_suspended = false;                         \
-    }                                                   \
-} while (0)
-
 static char *getproxy (struct url *);
 
 /* Retrieve the given URL.  Decides which loop to call -- HTTP, FTP,
@@ -1270,7 +1250,7 @@ retrieve_from_file (const char *file, bool html, int *count)
       parsed_url = url_parse (cur_url->url->url, NULL, tmpiri, true);
 
       proxy = getproxy (cur_url->url);
-      if ((opt.recursive || opt.page_requisites)
+      if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
           && ((cur_url->url->scheme != SCHEME_FTP
 #ifdef HAVE_SSL
           && cur_url->url->scheme != SCHEME_FTPS
