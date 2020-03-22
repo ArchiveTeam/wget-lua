@@ -82,6 +82,10 @@ dnl Zlib: Configure use of zlib for compression
 AC_ARG_WITH([zlib],
   [AS_HELP_STRING([--without-zlib], [disable zlib.])])
 
+dnl ZSTD: Configure use of zstd for compression
+AC_ARG_WITH([zstandard],
+  [AS_HELP_STRING([--without-zstandard], [disable zstandard.])])
+
 dnl Metalink: Configure use of the Metalink library
 AC_ARG_WITH([metalink],
   [AS_HELP_STRING([--with-metalink], [enable support for metalinks.])])
@@ -511,6 +515,17 @@ AS_IF([test x"$with_zlib" != xno], [
     AC_DEFINE([HAVE_LIBZ], [1], [Define if using zlib.])
   ], [
     AC_CHECK_LIB(z, compress)
+  ])
+])
+
+AS_IF([test x"$with_zstandard" != xno], [
+  with_zstandard=yes
+  PKG_CHECK_MODULES([ZSTD], libzstd, [
+    LIBS="$ZSTD_LIBS $LIBS"
+    CFLAGS="$ZSTD_CFLAGS $CFLAGS"
+    AC_DEFINE([HAVE_ZSTD], [1], [Define if using zstandard.])
+  ], [
+    AC_MSG_ERROR([zstd not found])
   ])
 ])
 
@@ -1031,6 +1046,7 @@ AC_MSG_NOTICE([Summary of build options:
   Libs:              $LIBS
   SSL:               $with_ssl
   Zlib:              $with_zlib
+  Zstandard:         $with_zstandard
   PSL:               $with_libpsl
   PCRE:              $PCRE_INFO
   Digest:            $ENABLE_DIGEST
