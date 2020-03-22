@@ -450,8 +450,14 @@ static struct cmdline_option option_data[] =
     { "wait", 'w', OPT_VALUE, "wait", -1 },
     { "waitretry", 0, OPT_VALUE, "waitretry", -1 },
     { "warc-cdx", 0, OPT_BOOLEAN, "warccdx", -1 },
-#ifdef HAVE_LIBZ
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
     { "warc-compression", 0, OPT_BOOLEAN, "warccompression", -1 },
+#endif
+#ifdef HAVE_ZSTD
+    { "warc-compression-use-zstd", 0, OPT_BOOLEAN, "warccompressionusezstd", -1 },
+    { "warc-zstd-dict", 0, OPT_VALUE, "warczstddict", -1 },
+    { "warc-zstd-dict-no-include", 0, OPT_BOOLEAN, "warczstddictnoinclude", -1 },
+    { "warc-zstd-dict-no-compression", 0, OPT_BOOLEAN, "warczstddictnocompression", -1 },
 #endif
     { "warc-dedup", 0, OPT_VALUE, "warccdxdedup", -1 },
     { "warc-digests", 0, OPT_BOOLEAN, "warcdigests", -1 },
@@ -937,31 +943,42 @@ FTPS options:\n"),
        --ftps-clear-data-connection    cipher the control channel only; all the data will be in plaintext\n"),
     N_("\
        --ftps-fallback-to-ftp          fall back to FTP if FTPS is not supported in the target server\n"),
+    "\n",
 #endif
 
     N_("\
 WARC options:\n"),
     N_("\
-       --warc-file=FILENAME        save request/response data to a .warc.gz file\n"),
+       --warc-file=FILENAME             save request/response data to a .warc.gz file\n"),
     N_("\
-       --warc-header=STRING        insert STRING into the warcinfo record\n"),
+       --warc-header=STRING             insert STRING into the warcinfo record\n"),
     N_("\
-       --warc-max-size=NUMBER      set maximum size of WARC files to NUMBER\n"),
+       --warc-max-size=NUMBER           set maximum size of WARC files to NUMBER\n"),
     N_("\
-       --warc-cdx                  write CDX index files\n"),
+       --warc-cdx                       write CDX index files\n"),
     N_("\
-       --warc-dedup=FILENAME       do not store records listed in this CDX file\n"),
-#ifdef HAVE_LIBZ
+       --warc-dedup=FILENAME            do not store records listed in this CDX file\n"),
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
     N_("\
-       --no-warc-compression       do not compress WARC files with GZIP\n"),
+       --no-warc-compression            do not compress WARC files with GZIP\n"),
+#endif
+#ifdef HAVE_ZSTD
+    N_("\
+       --warc-compression-use-zstd      use ZSTD compression for WARC files\n"),
+    N_("\
+       --warc-zstd-dict=FILENAME        the ZSTD compression dictionary to use\n"),
+    N_("\
+       --warc-zstd-dict-no-include      do not prepend ZSTD dictionary to WARC file\n"),
+    N_("\
+       --warc-zstd-dict-no-compression  do not compress the ZSTD dictionary\n"),
 #endif
     N_("\
-       --no-warc-digests           do not calculate SHA1 digests\n"),
+       --no-warc-digests                do not calculate SHA1 digests\n"),
     N_("\
-       --no-warc-keep-log          do not store the log file in a WARC record\n"),
+       --no-warc-keep-log               do not store the log file in a WARC record\n"),
     N_("\
-       --warc-tempdir=DIRECTORY    location for temporary files created by the\n\
-                                     WARC writer\n"),
+       --warc-tempdir=DIRECTORY         location for temporary files created by the\n\
+                                          WARC writer\n"),
     "\n",
 
     N_("\
@@ -1749,6 +1766,44 @@ for details.\n\n"));
           opt.progress_type = xstrdup ("dot");
         }
     }
+
+#ifdef HAVE_ZSTD
+  if (opt.warc_compression_use_zstd && !opt.warc_compression_enabled)
+    {
+      fprintf (stderr,
+               _("Options --no-warc-compression and --warc-compression-use-zstd "
+                 "can not be used together.\n"));
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+  if (! opt.warc_compression_use_zstd)
+    {
+      if (opt.warc_zstd_dict || opt.warc_zstd_dict_no_include ||
+          opt.warc_zstd_dict_no_compression)
+        {
+          fprintf (stderr,
+                   _("ZSTD options do not work without "
+                     "--warc-compression-use-zstd.\n"));
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+    }
+  if (opt.warc_zstd_dict == 0)
+    {
+      if (opt.warc_zstd_dict_no_include || opt.warc_zstd_dict_no_compression)
+        {
+          fprintf (stderr,
+                   _("ZSTD dictionary options do not work without "
+                     "--warc-zstd-dict.\n"));
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+    }
+  if (opt.warc_zstd_dict_no_include && opt.warc_zstd_dict_no_compression)
+    {
+      fprintf (stderr,
+               _("Options --warc-zstd-dict-no-compression and "
+                 "--warc-zstd-dict-no-include can not be used together.\n"));
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+#endif
 
 #ifdef HAVE_LIBZ
   if (opt.always_rest || opt.start_pos >= 0)

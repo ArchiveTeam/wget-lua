@@ -131,13 +131,17 @@ struct options
   bool warc_cdx_enabled;        /* Create CDX files? */
   bool warc_keep_log;           /* Store the log file in a WARC record. */
   char **warc_user_headers;     /* User-defined WARC header(s). */
+  bool warc_compression_use_zstd;
+  char *warc_zstd_dict;
+  bool warc_zstd_dict_no_include;
+  bool warc_zstd_dict_no_compression;
 
   bool enable_xattr;            /* Store metadata in POSIX extended attributes. */
 
   char *user;                   /* Generic username */
   char *passwd;                 /* Generic password */
   bool ask_passwd;              /* Ask for password? */
-  char *use_askpass;           /* value to use for use-askpass if WGET_ASKPASS is not set */
+  char *use_askpass;            /* value to use for use-askpass if WGET_ASKPASS is not set */
 
   bool always_rest;             /* Always use REST. */
   wgint start_pos;              /* Start position of a download. */
