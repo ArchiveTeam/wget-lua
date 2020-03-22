@@ -46,6 +46,9 @@ as that of the covered work.  */
 #ifdef HAVE_LIBZ
 #include <zlib.h>
 #endif
+#ifdef HAVE_ZSTD
+#include <zstd.h>
+#endif
 
 #ifdef HAVE_LIBUUID
 #include <uuid/uuid.h>
@@ -85,12 +88,25 @@ static FILE *warc_current_file;
 /* The gzip stream for the current WARC file
    (or NULL, if WARC or gzip is disabled). */
 static gzFile warc_current_gzfile;
+#endif
+#ifdef HAVE_ZSTD
+static ZSTD_CCtx *warc_current_zst_context;
+static ZSTD_CDict *warc_current_zst_dict;
+static FILE *warc_current_zst_dict_file;
+static bool warc_current_zst_full_record;
+static void *warc_current_zst_dict_buffer;
+static size_t warc_current_zst_buffer_in_size;
+static void *warc_current_zst_buffer_in;
+static size_t warc_current_zst_buffer_out_size;
+static void *warc_current_zst_buffer_out;
+#endif
 
-/* The offset of the current gzip record in the WARC file. */
-static off_t warc_current_gzfile_offset;
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
+/* The offset of the current compressed record in the WARC file. */
+static off_t warc_current_compressed_file_offset;
 
 /* The uncompressed size (so far) of the current record. */
-static off_t warc_current_gzfile_uncompressed_size;
+static off_t warc_current_compressed_file_uncompressed_size;
 # endif
 
 /* This is true until a warc_write_* method fails. */
@@ -141,7 +157,7 @@ warc_cmp_sha1_digest (const void *digest1, const void *digest2)
 
 
 /* Writes SIZE bytes from BUFFER to the current WARC file,
-   through gzwrite if compression is enabled.
+   through gzwrite or zstd if compression is enabled.
    Returns the number of uncompressed bytes written.  */
 static size_t
 warc_write_buffer (const char *buffer, size_t size)
@@ -149,8 +165,54 @@ warc_write_buffer (const char *buffer, size_t size)
 #ifdef HAVE_LIBZ
   if (warc_current_gzfile)
     {
-      warc_current_gzfile_uncompressed_size += size;
+      warc_current_compressed_file_uncompressed_size += size;
       return gzwrite (warc_current_gzfile, buffer, size);
+    }
+#endif
+#ifdef HAVE_ZSTD
+#ifdef HAVE_LIBZ
+  else
+#endif
+  if (warc_current_zst_context)
+    {
+      warc_current_compressed_file_uncompressed_size += size;
+      ZSTD_inBuffer input = { buffer, size, 0 };
+      ZSTD_EndDirective mode = warc_current_zst_full_record ? ZSTD_e_end : ZSTD_e_continue;
+      bool finished;
+      do
+        {
+          ZSTD_outBuffer output = { warc_current_zst_buffer_out,
+                                   warc_current_zst_buffer_out_size, 0 };
+          size_t remaining = ZSTD_compressStream2 (warc_current_zst_context,
+                                                   &output, &input, mode);
+
+          if (ZSTD_isError(remaining))
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error compressing data.\n"));
+              warc_write_ok = false;
+              return remaining;
+            }
+
+          size_t written = fwrite(warc_current_zst_buffer_out, 1, output.pos,
+                                  warc_current_file);
+          if (written != output.pos)
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error writing to WARC ZST file.\n"));
+              warc_write_ok = false;
+              return written;
+            }
+          finished = warc_current_zst_full_record ? (remaining == 0) : (input.pos == input.size);
+        } while (! finished);
+      if (input.pos != input.size)
+        {
+          logprintf (LOG_NOTQUIET,
+                     _("Error reading all compressed data from buffer.\n"));
+          warc_write_ok = false;
+          return false;
+        }
+      return size;
     }
   else
 #endif
@@ -178,6 +240,7 @@ warc_write_string (const char *str)
 
 #define EXTRA_GZIP_HEADER_SIZE 14
 #define GZIP_STATIC_HEADER_SIZE  10
+//TODO
 #define FLG_FEXTRA          0x04
 #define OFF_FLG             3
 
@@ -200,42 +263,55 @@ warc_write_start_record (void)
   if (opt.warc_maxsize > 0 && ftello (warc_current_file) >= opt.warc_maxsize)
     warc_start_new_file (false);
 
-#ifdef HAVE_LIBZ
-  /* Start a GZIP stream, if required. */
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
+  /* Start a GZIP or ZSTD stream, if required. */
   if (opt.warc_compression_enabled)
     {
-      int dup_fd;
-      /* Record the starting offset of the new record. */
-      warc_current_gzfile_offset = ftello (warc_current_file);
-
-      /* Reserve space for the extra GZIP header field.
-         In warc_write_end_record we will fill this space
-         with information about the uncompressed and
-         compressed size of the record. */
-      fseek (warc_current_file, EXTRA_GZIP_HEADER_SIZE, SEEK_CUR);
-      fflush (warc_current_file);
-
-      /* Start a new GZIP stream. */
-      dup_fd = dup (fileno (warc_current_file));
-      if (dup_fd < 0)
+      warc_current_compressed_file_offset = ftello (warc_current_file);
+      warc_current_compressed_file_uncompressed_size = 0;
+#ifdef HAVE_ZSTD
+      if (opt.warc_compression_use_zstd)
         {
-          logprintf (LOG_NOTQUIET,
-_("Error duplicating WARC file file descriptor.\n"));
-          warc_write_ok = false;
-          return false;
+          warc_current_zst_full_record = false;
         }
-
-      warc_current_gzfile = gzdopen (dup_fd, "wb9");
-      warc_current_gzfile_uncompressed_size = 0;
-
-      if (warc_current_gzfile == NULL)
+#ifdef HAVE_LIBZ
+      else
+#endif
+#endif
+#ifdef HAVE_LIBZ
         {
-          logprintf (LOG_NOTQUIET,
-_("Error opening GZIP stream to WARC file.\n"));
-          close (dup_fd);
-          warc_write_ok = false;
-          return false;
+          int dup_fd;
+          /* Record the starting offset of the new record. */
+
+          /* Reserve space for the extra GZIP header field.
+             In warc_write_end_record we will fill this space
+             with information about the uncompressed and
+             compressed size of the record. */
+          fseek (warc_current_file, EXTRA_GZIP_HEADER_SIZE, SEEK_CUR);
+          fflush (warc_current_file);
+
+          /* Start a new GZIP or ZSTD stream. */
+          dup_fd = dup (fileno (warc_current_file));
+          if (dup_fd < 0)
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error duplicating WARC file file descriptor.\n"));
+              warc_write_ok = false;
+              return false;
+            }
+
+          warc_current_gzfile = gzdopen (dup_fd, "wb9");
+
+          if (warc_current_gzfile == NULL)
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error opening GZIP stream to WARC file.\n"));
+              close (dup_fd);
+              warc_write_ok = false;
+              return false;
+            }
         }
+#endif
     }
 #endif
 
@@ -284,7 +360,14 @@ warc_write_block_from_file (FILE *data_in)
 {
   /* Add the Content-Length header. */
   char content_length[MAX_INT_TO_STRING_LEN(off_t)];
-  char buffer[BUFSIZ];
+  size_t buffer_size;
+#ifdef HAVE_ZSTD
+  if (warc_current_zst_context != NULL)
+    buffer_size = warc_current_zst_buffer_out_size;
+  else
+#endif
+    buffer_size = BUFSIZ;
+  char buffer[buffer_size];
   size_t s;
 
   fseeko (data_in, 0L, SEEK_END);
@@ -298,7 +381,7 @@ warc_write_block_from_file (FILE *data_in)
     warc_write_ok = false;
 
   /* Copy the data in the file to the WARC record. */
-  while (warc_write_ok && (s = fread (buffer, 1, BUFSIZ, data_in)) > 0)
+  while (warc_write_ok && (s = fread (buffer, 1, buffer_size, data_in)) > 0)
     {
       if (warc_write_buffer (buffer, s) < s)
         warc_write_ok = false;
@@ -316,6 +399,10 @@ warc_write_block_from_file (FILE *data_in)
 static bool
 warc_write_end_record (void)
 {
+#ifdef HAVE_ZSTD
+  if (opt.warc_compression_use_zstd)
+    warc_current_zst_full_record = true;
+#endif
   warc_write_buffer ("\r\n\r\n", 4);
 
 #ifdef HAVE_LIBZ
@@ -340,24 +427,24 @@ warc_write_end_record (void)
          extra header field of the GZIP stream.
 
          In warc_write_start_record we reserved space for this extra header.
-         This extra space starts at warc_current_gzfile_offset and fills
+         This extra space starts at warc_current_compressed_file_offset and fills
          EXTRA_GZIP_HEADER_SIZE bytes.  The static GZIP header starts at
-         warc_current_gzfile_offset + EXTRA_GZIP_HEADER_SIZE.
+         warc_current_compressed_file_offset + EXTRA_GZIP_HEADER_SIZE.
 
          We need to do three things:
-         1. Move the static GZIP header to warc_current_gzfile_offset;
+         1. Move the static GZIP header to warc_current_compressed_file_offset;
          2. Set the FEXTRA flag in the GZIP header;
          3. Write the extra GZIP header after the static header, that is,
-            starting at warc_current_gzfile_offset + GZIP_STATIC_HEADER_SIZE.
+            starting at warc_current_compressed_file_offset + GZIP_STATIC_HEADER_SIZE.
       */
 
       /* Calculate the uncompressed and compressed sizes. */
       current_offset = ftello (warc_current_file);
-      uncompressed_size = current_offset - warc_current_gzfile_offset;
-      compressed_size = warc_current_gzfile_uncompressed_size;
+      uncompressed_size = current_offset - warc_current_compressed_file_offset;
+      compressed_size = warc_current_compressed_file_uncompressed_size;
 
       /* Go back to the static GZIP header. */
-      fseeko (warc_current_file, warc_current_gzfile_offset
+      fseeko (warc_current_file, warc_current_compressed_file_offset
               + EXTRA_GZIP_HEADER_SIZE, SEEK_SET);
 
       /* Read the header. */
@@ -373,8 +460,8 @@ warc_write_end_record (void)
       static_header[OFF_FLG] = static_header[OFF_FLG] | FLG_FEXTRA;
 
       /* Write the header back to the file, but starting at
-         warc_current_gzfile_offset. */
-      fseeko (warc_current_file, warc_current_gzfile_offset, SEEK_SET);
+         warc_current_compressed_file_offset. */
+      fseeko (warc_current_file, warc_current_compressed_file_offset, SEEK_SET);
       fwrite (static_header, 1, GZIP_STATIC_HEADER_SIZE, warc_current_file);
 
       /* Prepare the extra GZIP header. */
@@ -399,7 +486,7 @@ warc_write_end_record (void)
       extra_header[13] = (compressed_size >> 24) & 255;
 
       /* Write the extra header after the static header. */
-      fseeko (warc_current_file, warc_current_gzfile_offset
+      fseeko (warc_current_file, warc_current_compressed_file_offset
               + GZIP_STATIC_HEADER_SIZE, SEEK_SET);
       fwrite (extra_header, 1, EXTRA_GZIP_HEADER_SIZE, warc_current_file);
 
@@ -407,7 +494,7 @@ warc_write_end_record (void)
       fflush (warc_current_file);
       fseeko (warc_current_file, 0, SEEK_END);
     }
-#endif /* HAVE_LIBZ */
+#endif
 
   return warc_write_ok;
 }
@@ -813,6 +900,65 @@ warc_write_warcinfo_record (const char *filename)
   return warc_write_ok;
 }
 
+#ifdef HAVE_ZSTD
+/* Writes the ZSTD dictionary to the WARC file.
+
+   The dictionary is stored in a skippable frame. This frame has MAGIC
+   0x184d2a5d, followed a by a header of length 4 bytes containing the size of
+   the dictionary data. The dictionary data follows after that. The next frame
+   if a ZST frame with the WARC data.
+
+   Returns true on success, false otherwise.
+   */
+static bool
+warc_write_zstd_dictionary (const char *buffer, size_t size)
+{
+  if (opt.warc_zstd_dict)
+    {
+      char size_string[4];
+      int final_size;
+
+      fwrite ("\x5d\x2a\x4d\x18", 1, 4, warc_current_file);
+      if (opt.warc_zstd_dict_no_compression)
+        {
+          final_size = (int) size;
+          fwrite (&final_size, sizeof(int), 1, warc_current_file);
+          if (fwrite (buffer, 1, size, warc_current_file) != size)
+            {
+              logprintf (LOG_NOTQUIET, _("Error writing ZST dictionary frame.\n"));
+              warc_write_ok = false;
+              return false;
+            }
+        }
+      else
+        {
+          size_t compress_buffer_size = ZSTD_compressBound (size);
+          char *compress_buffer = xmalloc (compress_buffer_size);
+          size_t compress_size = ZSTD_compress (compress_buffer,
+            compress_buffer_size, buffer, size, 9);
+          if (ZSTD_isError (compress_size))
+            {
+              logprintf (LOG_NOTQUIET, _("Error compression ZST dictionary.\n"));
+              warc_write_ok = false;
+              return false;
+            }
+          final_size = (int) compress_size;
+          fwrite (&final_size, sizeof(int), 1, warc_current_file);
+
+          if (fwrite (compress_buffer, 1, compress_size, warc_current_file) != compress_size)
+            {
+              logprintf (LOG_NOTQUIET, _("Error writing ZST dictionary frame.\n"));
+              warc_write_ok = false;
+              return false;
+            }
+
+          xfree (compress_buffer);
+        }
+    }
+  return true;
+}
+#endif
+
 /* Opens a new WARC file.
    If META is true, generates a filename ending with 'meta.warc.gz'.
 
@@ -829,15 +975,31 @@ warc_start_new_file (bool meta)
 {
 #ifdef __VMS
 # define WARC_GZ "warc-gz"
+# define WARC_ZST "warc-zst"
 #else /* def __VMS */
 # define WARC_GZ "warc.gz"
+# define WARC_ZST "warc.zst"
 #endif /* def __VMS [else] */
 
+  char *extension;
+
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
+  if (opt.warc_compression_enabled)
+    {
+#ifdef HAVE_ZSTD
+      if (opt.warc_compression_use_zstd)
+        extension = WARC_ZST;
 #ifdef HAVE_LIBZ
-  const char *extension = (opt.warc_compression_enabled ? WARC_GZ : "warc");
-#else
-  const char *extension = "warc";
+      else
 #endif
+#endif
+#ifdef HAVE_LIBZ
+        extension = WARC_GZ;
+#endif
+    }
+  else
+#endif
+    extension = "warc";
 
   int base_filename_length;
   char *new_filename;
@@ -854,8 +1016,8 @@ warc_start_new_file (bool meta)
   warc_current_file_number++;
 
   base_filename_length = strlen (opt.warc_filename);
-  /* filename format:  base + "-" + 5 digit serial number + ".warc.gz" */
-  new_filename = xmalloc (base_filename_length + 1 + 5 + 8 + 1);
+  /* filename format:  base + "-" + 5 digit serial number + ".warc.zst" */
+  new_filename = xmalloc (base_filename_length + 1 + 5 + 9 + 1);
 
   warc_current_filename = new_filename;
 
@@ -874,6 +1036,82 @@ warc_start_new_file (bool meta)
 
   /* Open the WARC file. */
   warc_current_file = fopen (new_filename, "wb+");
+
+#ifdef HAVE_ZSTD
+  if (opt.warc_compression_use_zstd)
+    {
+      /* Prepare ZSTD buffer. */
+      warc_current_zst_buffer_in_size = ZSTD_CStreamInSize();
+      warc_current_zst_buffer_in = xmalloc(warc_current_zst_buffer_in_size);
+      warc_current_zst_buffer_out_size = ZSTD_CStreamOutSize();
+      warc_current_zst_buffer_out = xmalloc(warc_current_zst_buffer_out_size);
+
+      /* Create reusable ZSTD context. */
+      warc_current_zst_context = ZSTD_createCCtx();
+      if (warc_current_zst_context == NULL)
+        {
+          logprintf (LOG_NOTQUIET,
+                     _("Error creating ZSTD context.\n"));
+          warc_write_ok = false;
+          return false;
+        }
+
+      /* Add a checksum to ZSTD frames. */
+      if (ZSTD_isError (
+          ZSTD_CCtx_setParameter (warc_current_zst_context, ZSTD_c_checksumFlag, 1)))
+        {
+          logprintf(LOG_NOTQUIET,
+                    _("Error setting compression parameters.\n"));
+          warc_write_ok = false;
+          return false;
+        }
+
+      if (opt.warc_zstd_dict != NULL)
+        {
+          warc_current_zst_dict_file = fopen(opt.warc_zstd_dict, "rb");
+
+          /* Read ZSTD dictionary. */
+          fseek(warc_current_zst_dict_file, 0L, SEEK_END);
+          size_t dict_size = ftell(warc_current_zst_dict_file);
+          warc_current_zst_dict_buffer = xmalloc(dict_size);
+          fseek(warc_current_zst_dict_file, 0L, SEEK_SET);
+
+          if (fread(warc_current_zst_dict_buffer, 1, dict_size,
+                    warc_current_zst_dict_file) != dict_size)
+            {
+              logprintf (LOG_NOTQUIET, _("Error reading ZSTD dictionary.\n"));
+              return false;
+            }
+
+          /* Load the ZSTD dictionary. */
+          warc_current_zst_dict = ZSTD_createCDict(warc_current_zst_dict_buffer,
+                                                   dict_size, 9);
+          if (warc_current_zst_dict == NULL)
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error loading ZSTD dictionary.\n"));
+              return false;
+            }
+
+          if (! opt.warc_zstd_dict_no_include &&
+              ! warc_write_zstd_dictionary (warc_current_zst_dict_buffer, dict_size))
+            return false;
+
+          /* Reference the ZSTD dictionary with the context. */
+          if (ZSTD_isError (ZSTD_CCtx_refCDict (warc_current_zst_context,
+                                                warc_current_zst_dict)))
+            {
+              logprintf (LOG_NOTQUIET,
+                         _("Error referencing ZSTD dict to content.\n"));
+              warc_write_ok = false;
+              return false;
+            }
+
+          fclose(warc_current_zst_dict_file);
+          xfree(warc_current_zst_dict_buffer);
+        }
+    }
+#endif
   if (warc_current_file == NULL)
     {
       logprintf (LOG_NOTQUIET, _("Error opening WARC file %s.\n"),
@@ -1266,6 +1504,17 @@ warc_close (void)
       fclose (warc_log_fp);
       log_set_warc_log_fp (NULL);
     }
+
+#ifdef HAVE_ZSTD
+  if (opt.warc_compression_use_zstd)
+    {
+      ZSTD_freeCCtx (warc_current_zst_context);
+      xfree (warc_current_zst_buffer_in);
+      xfree (warc_current_zst_buffer_out);
+      if (opt.warc_zstd_dict != NULL)
+        ZSTD_freeCDict (warc_current_zst_dict);
+    }
+#endif
 }
 
 /* Creates a temporary file for writing WARC output.

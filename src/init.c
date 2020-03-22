@@ -345,8 +345,11 @@ static const struct {
   { "waitretry",        &opt.waitretry,         cmd_time },
   { "warccdx",          &opt.warc_cdx_enabled,  cmd_boolean },
   { "warccdxdedup",     &opt.warc_cdx_dedup_filename,  cmd_file },
-#ifdef HAVE_LIBZ
+#if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
   { "warccompression",  &opt.warc_compression_enabled, cmd_boolean },
+#endif
+#ifdef HAVE_ZSTD
+  { "warccompressionusezstd",      &opt.warc_compression_use_zstd, cmd_boolean },
 #endif
   { "warcdigests",      &opt.warc_digests_enabled, cmd_boolean },
   { "warcfile",         &opt.warc_filename,     cmd_file },
@@ -354,6 +357,11 @@ static const struct {
   { "warckeeplog",      &opt.warc_keep_log,     cmd_boolean },
   { "warcmaxsize",      &opt.warc_maxsize,      cmd_bytes },
   { "warctempdir",      &opt.warc_tempdir,      cmd_directory },
+#ifdef HAVE_ZSTD
+  { "warczstddict",     &opt.warc_zstd_dict, cmd_file },
+  { "warczstddictnocompression", &opt.warc_zstd_dict_no_compression, cmd_boolean },
+  { "warczstddictnoinclude", &opt.warc_zstd_dict_no_include, cmd_boolean },
+#endif
 #ifdef USE_WATT32
   { "wdebug",           &opt.wdebug,            cmd_boolean },
 #endif
@@ -371,7 +379,6 @@ command_by_name (const char *cmdname)
   /* Use binary search for speed.  Wget has ~100 commands, which
      guarantees a worst case performance of 7 string comparisons.  */
   int lo = 0, hi = countof (commands) - 1;
-
   while (lo <= hi)
     {
       int mid = (lo + hi) >> 1;
@@ -493,8 +500,14 @@ defaults (void)
   opt.truncate_output_document = false;
 
   opt.warc_maxsize = 0; /* 1024 * 1024 * 1024; */
-#ifdef HAVE_LIBZ
+#if defined(HAVE_LIBZ) || defined(HAVE_ZTSD)
   opt.warc_compression_enabled = true;
+#ifdef HAVE_ZSTD
+  opt.warc_compression_use_zstd = false;
+  opt.warc_zstd_dict = NULL;
+  opt.warc_zstd_dict_no_include = false;
+  opt.warc_zstd_dict_no_compression = false;
+#endif
 #else
   opt.warc_compression_enabled = false;
 #endif
@@ -1968,6 +1981,7 @@ cleanup (void)
   free_vec (opt.ignore_tags);
   xfree (opt.progress_type);
   xfree (opt.warc_filename);
+  xfree (opt.warc_zstd_dict);
   xfree (opt.warc_tempdir);
   xfree (opt.warc_cdx_dedup_filename);
   xfree (opt.ftp_user);
