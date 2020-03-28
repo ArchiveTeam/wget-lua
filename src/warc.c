@@ -127,31 +127,72 @@ static char *warc_current_filename;
 static int warc_current_file_number;
 
 /* The table of CDX records, if deduplication is enabled. */
-static struct hash_table * warc_cdx_dedup_table;
+static struct hash_table * warc_dedup_table;
 
 static bool warc_start_new_file (bool meta);
 
 
-struct warc_cdx_record
+struct warc_dedup_record
 {
-  char *url;
+  char *uri;
+  char *date;
   char *uuid;
+  char *digest[SHA1_DIGEST_SIZE];
+};
+
+struct warc_dedup_key
+{
+  char *uri;
   char digest[SHA1_DIGEST_SIZE];
 };
 
+/* Calculates the hash of the warc_dedup_key for the hash table. If URL agnostic
+   deduplication is enabled, a SHA1 hash is calculated over the url, after which
+   a final SHA1 hash is calculated over the combination of the digest and the
+   hash of the URL. If not URL agnostic deduplication is used the digest is
+   used as final SHA1 hash.
+
+   The first bytes of the SHA1 hash are used as unsigned long hash for the hash
+   table. */
 static unsigned long
 warc_hash_sha1_digest (const void *key)
 {
-  /* We just use some of the first bytes of the digest. */
+  const struct warc_dedup_key *dedup_key = key;
   unsigned long v = 0;
-  memcpy (&v, key, sizeof (unsigned long));
+
+  /* If URL agnostic deduplication is enabled, only the payload SHA1 hash is
+     used for the hash table index. If this is not enabled, the URI is hashed
+     as well and a hash of the concatenated digest and URI hashes is used for
+     the hash table index. */
+  if (opt.warc_dedup_url_agnostic)
+    memcpy (&v, dedup_key->digest, sizeof (unsigned long));
+  else
+    {
+      char digest[SHA1_DIGEST_SIZE*2];
+      char compare_digest[SHA1_DIGEST_SIZE];
+
+      memcpy(digest, dedup_key->digest, SHA1_DIGEST_SIZE);
+      sha1_buffer(dedup_key->uri, strlen(dedup_key->uri),
+                  digest + SHA1_DIGEST_SIZE);
+      sha1_buffer(digest, SHA1_DIGEST_SIZE*2, compare_digest);
+
+      memcpy (&v, compare_digest, sizeof (unsigned long));
+    }
+
   return v;
 }
 
+/* Checks the exact identity of the data from the hash table. If URL agnostic
+   deduplication is enabled, only the digest is compared, else both the URL and
+   the digest are compared. */
 static int
-warc_cmp_sha1_digest (const void *digest1, const void *digest2)
+warc_cmp_sha1_digest (const void *key1, const void *key2)
 {
-  return !memcmp (digest1, digest2, SHA1_DIGEST_SIZE);
+  const struct warc_dedup_key *record1 = key1;
+  const struct warc_dedup_key *record2 = key2;
+
+  return memcmp (record1->digest, record2->digest, SHA1_DIGEST_SIZE) == 0 &&
+      (strcmp (record1->uri, record2->uri) == 0 || opt.warc_dedup_url_agnostic);
 }
 
 
@@ -240,7 +281,6 @@ warc_write_string (const char *str)
 
 #define EXTRA_GZIP_HEADER_SIZE 14
 #define GZIP_STATIC_HEADER_SIZE  10
-//TODO
 #define FLG_FEXTRA          0x04
 #define OFF_FLG             3
 
@@ -326,7 +366,7 @@ warc_write_start_record (void)
     }
 #endif
 
-  warc_write_string ("WARC/1.0\r\n");
+  warc_write_string ("WARC/1.1\r\n");
   return warc_write_ok;
 }
 
@@ -335,22 +375,6 @@ warc_write_start_record (void)
    before warc_write_block_from_file.  */
 static bool
 warc_write_header (const char *name, const char *value)
-{
-  if (value)
-    {
-      warc_write_string (name);
-      warc_write_string (": ");
-      warc_write_string (value);
-      warc_write_string ("\r\n");
-    }
-  return warc_write_ok;
-}
-
-/* Writes a WARC header with a URI as value to the current WARC record.
-   This method may be run after warc_write_start_record and
-   before warc_write_block_from_file.  */
-static bool
-warc_write_header_uri (const char *name, const char *value)
 {
   if (value)
     {
@@ -531,13 +555,22 @@ warc_write_end_record (void)
 /* Writes the WARC-Date header for the given timestamp to
    the current WARC record.
    If timestamp is NULL, the current time will be used.  */
-static bool
+static char *
 warc_write_date_header (const char *timestamp)
 {
-  char current_timestamp[21];
+  char *current_timestamp;
 
-  return warc_write_header ("WARC-Date", timestamp ? timestamp :
-                            warc_timestamp (current_timestamp, sizeof(current_timestamp)));
+  if (timestamp)
+      current_timestamp = xstrdup (timestamp);
+  else
+    {
+      current_timestamp = xmalloc (21);
+      warc_timestamp (current_timestamp, 21);
+    }
+
+  if (! warc_write_header ("WARC-Date", current_timestamp))
+    return NULL;
+  return current_timestamp;
 }
 
 /* Writes the WARC-IP-Address header for the given IP to
@@ -903,9 +936,9 @@ warc_write_warcinfo_record (const char *filename)
     }
 
   fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE);
-  fprintf (warc_tmp, "format: WARC File Format 1.0\r\n");
+  fprintf (warc_tmp, "format: WARC File Format 1.1\r\n");
   fprintf (warc_tmp,
-"conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1_latestdraft.pdf\r\n");
+"conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n");
   fprintf (warc_tmp, "robots: %s\r\n", (opt.use_robots ? "classic" : "off"));
   fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring);
   /* Add the user headers, if any. */
@@ -1042,6 +1075,10 @@ warc_start_new_file (bool meta)
   xfree (warc_current_filename);
 
   warc_current_file_number++;
+
+  /* init the hash table */
+  warc_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
+                                     warc_cmp_sha1_digest);
 
   base_filename_length = strlen (opt.warc_filename);
   /* filename format:  base + "-" + 5 digit serial number + ".warc.zst" */
@@ -1187,6 +1224,25 @@ warc_start_cdx_file (void)
   return true;
 }
 
+/* Store the WARC record in the warc_dedup_table using a warc_dedup_key and a
+   warc_dedup_record for the data. Copies all variables to the hash table. */
+static void
+store_warc_record (const char *uri, const char *date, const char *uuid,
+                   const char *digest)
+{
+  struct warc_dedup_record *rec = xmalloc (sizeof (struct warc_dedup_record));
+  struct warc_dedup_key *key = xmalloc (sizeof (struct warc_dedup_key));
+
+  rec->uri = xstrdup (uri);
+  rec->date = xstrdup (date);
+  rec->uuid = xstrdup (uuid);
+  key->uri = xstrdup (uri);
+  memcpy (rec->digest, digest, SHA1_DIGEST_SIZE);
+  memcpy (key->digest, digest, SHA1_DIGEST_SIZE);
+
+  hash_table_put (warc_dedup_table, key, rec);
+}
+
 #define CDX_FIELDSEP " \t\r\n"
 
 /* Parse the CDX header and find the field numbers of the original url,
@@ -1234,7 +1290,7 @@ warc_parse_cdx_header (char *lineptr, int *field_num_original_url,
          && *field_num_record_id != -1;
 }
 
-/* Parse the CDX record and add it to the warc_cdx_dedup_table hash table. */
+/* Parse the CDX record and add it to the warc_dedup_table hash table. */
 static void
 warc_process_cdx_line (char *lineptr, int field_num_original_url,
                        int field_num_checksum, int field_num_record_id)
@@ -1274,6 +1330,7 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
          bytes.  */
       size_t checksum_l;
       char * checksum_v;
+      char *digest;
       base32_decode_alloc (checksum, strlen (checksum), &checksum_v,
                            &checksum_l);
       xfree (checksum);
@@ -1281,12 +1338,8 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       if (checksum_v != NULL && checksum_l == SHA1_DIGEST_SIZE)
         {
           /* This is a valid line with a valid checksum. */
-          struct warc_cdx_record *rec;
-          rec = xmalloc (sizeof (struct warc_cdx_record));
-          rec->url = original_url;
-          rec->uuid = record_id;
-          memcpy (rec->digest, checksum_v, SHA1_DIGEST_SIZE);
-          hash_table_put (warc_cdx_dedup_table, rec->digest, rec);
+          memcpy (digest, checksum_v, SHA1_DIGEST_SIZE);
+          store_warc_record(original_url, NULL, record_id, digest);
           xfree (checksum_v);
         }
       else
@@ -1305,7 +1358,7 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
 }
 
 /* Loads the CDX file from opt.warc_cdx_dedup_filename and fills
-   the warc_cdx_dedup_table. */
+   the warc_dedup_table. */
 static bool
 warc_load_cdx_dedup_file (void)
 {
@@ -1350,9 +1403,7 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
     {
       int nrecords;
 
-      /* Initialize the table. */
-      warc_cdx_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
-                                             warc_cmp_sha1_digest);
+      /* Load CDX data into the table. */
 
       do
         {
@@ -1367,7 +1418,7 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
       while (line_length != -1);
 
       /* Print results. */
-      nrecords = hash_table_count (warc_cdx_dedup_table);
+      nrecords = hash_table_count (warc_dedup_table);
       logprintf (LOG_VERBOSE, ngettext ("Loaded %d record from CDX.\n\n",
                                         "Loaded %d records from CDX.\n\n",
                                          nrecords),
@@ -1381,20 +1432,32 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
 }
 #undef CDX_FIELDSEP
 
-/* Returns the existing duplicate CDX record for the given url and payload
-   digest.  Returns NULL if the url is not found or if the payload digest
-   does not match, or if CDX deduplication is disabled. */
-static struct warc_cdx_record *
-warc_find_duplicate_cdx_record (const char *url, char *sha1_digest_payload)
-{
-  struct warc_cdx_record *rec_existing;
+/* Returns the warc_dedup_record for the already processed WARC record for
+   a given payload digest if URL agnostic deduplication is enabled, and else
+   for both the URL and payload digest.
 
-  if (warc_cdx_dedup_table == NULL)
+   Returns NULL if the URL is not of if the URL and payload digest or only
+   payload digest to not match the found record. */
+static struct warc_dedup_record *
+warc_find_duplicate_cdx_record (const char *url, const char *sha1_digest_payload)
+{
+  struct warc_dedup_record *rec_existing;
+  struct warc_dedup_key *key;
+
+  if (warc_dedup_table == NULL)
     return NULL;
 
-  rec_existing = hash_table_get (warc_cdx_dedup_table, sha1_digest_payload);
+  key = xmalloc (sizeof (struct warc_dedup_key));
+  key->uri = xstrdup (url);
+  memcpy (key->digest, sha1_digest_payload, SHA1_DIGEST_SIZE);
 
-  if (rec_existing && strcmp (rec_existing->url, url) == 0)
+  rec_existing = hash_table_get (warc_dedup_table, key);
+
+  xfree (key->uri);
+  xfree (key);
+
+  if (rec_existing && memcmp (rec_existing->digest, sha1_digest_payload, SHA1_DIGEST_SIZE) == 0
+      && (opt.warc_dedup_url_agnostic || strcmp (rec_existing->uri, url) == 0))
     return rec_existing;
   else
     return NULL;
@@ -1603,7 +1666,7 @@ warc_write_request_record (const char *url, const char *timestamp_str,
 {
   warc_write_start_record ();
   warc_write_header ("WARC-Type", "request");
-  warc_write_header_uri ("WARC-Target-URI", url);
+  warc_write_header ("WARC-Target-URI", url);
   warc_write_header ("Content-Type", "application/http;msgtype=request");
   warc_write_date_header (timestamp_str);
   warc_write_header ("WARC-Record-ID", record_uuid);
@@ -1693,7 +1756,8 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
 static bool
 warc_write_revisit_record (const char *url, const char *timestamp_str,
                            const char *concurrent_to_uuid, const char *payload_digest,
-                           const char *refers_to, const ip_address *ip, FILE *body)
+                           const char *refers_to, const char *refers_to_target_uri,
+                           const char *refers_to_date, const ip_address *ip, FILE *body)
 {
   char revisit_uuid [48];
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
@@ -1710,9 +1774,13 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
   warc_write_header ("WARC-Refers-To", refers_to);
-  warc_write_header ("WARC-Profile", "http://netpreserve.org/warc/1.0/revisit/identical-payload-digest");
+  if (refers_to_target_uri != NULL)
+    warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
+  if (refers_to_date != NULL)
+    warc_write_header ("WARC-Refers-To-Date", refers_to_date);
+  warc_write_header ("WARC-Profile", "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest");
   warc_write_header ("WARC-Truncated", "length");
-  warc_write_header_uri ("WARC-Target-URI", url);
+  warc_write_header ("WARC-Target-URI", url);
   warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
   warc_write_header ("Content-Type", "application/http;msgtype=response");
@@ -1750,43 +1818,65 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   char sha1_res_block[SHA1_DIGEST_SIZE];
   char sha1_res_payload[SHA1_DIGEST_SIZE];
   char response_uuid [48];
+  const char *date;
   off_t offset;
+  bool write_revisit;
 
-  if (opt.warc_digests_enabled)
+  if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
       /* Calculate the block and payload digests. */
       rewind (body);
+
       if (warc_sha1_stream_with_payload (body, sha1_res_block, sha1_res_payload,
           payload_offset) == 0)
         {
           /* Decide (based on url + payload digest) if we have seen this
              data before. */
-          struct warc_cdx_record *rec_existing;
+          struct warc_dedup_record *rec_existing;
           rec_existing = warc_find_duplicate_cdx_record (url, sha1_res_payload);
+
           if (rec_existing != NULL)
             {
-              bool result;
-
-              /* Found an existing record. */
-              logprintf (LOG_VERBOSE,
-          _("Found exact match in CDX file. Saving revisit record to WARC.\n"));
-
-              /* Remove the payload from the file. */
-              if (payload_offset > 0)
+              /* Check the size of the payload in case a minimum number of
+                 bytes is set for the payload to deduplicate. */
+              if (opt.warc_dedup_min_size > 0)
                 {
-                  if (ftruncate (fileno (body), payload_offset) == -1)
-                    return false;
+                  fseeko (body, 0L, SEEK_END);
+                  write_revisit = ((ftello (body) - payload_offset) >= opt.warc_dedup_min_size);
+                  if (fseeko (body, 0L, SEEK_SET) != 0)
+                    {
+                      warc_write_ok = false;
+                      return false;
+                    }
                 }
+              else
+                write_revisit = true;
 
-              /* Send the original payload digest. */
-              warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-              result = warc_write_revisit_record (url, timestamp_str,
-                         concurrent_to_uuid, payload_digest, rec_existing->uuid,
-                         ip, body);
+              /* If the payload is large enough, write a revisit record. */
+              if (write_revisit)
+                {
+                  bool result;
 
-              return result;
+                  /* Found an existing record. */
+                  logprintf (LOG_VERBOSE,
+              _("Found exact match in CDX file. Saving revisit record to WARC.\n"));
+
+                  /* Remove the payload from the file. */
+                  if (payload_offset > 0)
+                    {
+                      if (ftruncate (fileno (body), payload_offset) == -1)
+                        return false;
+                    }
+
+                  /* Send the original payload digest. */
+                  warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
+                  result = warc_write_revisit_record (url, timestamp_str,
+                             concurrent_to_uuid, payload_digest, rec_existing->uuid,
+                             rec_existing->uri, rec_existing->date, ip, body);
+
+                  return result;
+                }
             }
-
           warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
           warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
         }
@@ -1804,8 +1894,8 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", response_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  warc_write_header_uri ("WARC-Target-URI", url);
-  warc_write_date_header (timestamp_str);
+  warc_write_header ("WARC-Target-URI", url);
+  date = warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
   warc_write_header ("WARC-Block-Digest", block_digest);
   warc_write_header ("WARC-Payload-Digest", payload_digest);
@@ -1813,7 +1903,12 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   warc_write_block_from_file (body);
   warc_write_end_record ();
 
+  /* Store the WARC record in the hash table for deduplication if enabled. */
+  if (!opt.warc_dedup_disable)
+    store_warc_record (url, date, response_uuid, sha1_res_payload);
+
   fclose (body);
+  xfree (date);
 
   if (warc_write_ok && opt.warc_cdx_enabled)
     {
@@ -1861,7 +1956,7 @@ warc_write_record (const char *record_type, const char *resource_uuid,
   warc_write_header ("WARC-Record-ID", resource_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  warc_write_header_uri ("WARC-Target-URI", url);
+  warc_write_header ("WARC-Target-URI", url);
   warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
   warc_write_digest_headers (body, payload_offset);

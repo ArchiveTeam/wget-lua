@@ -460,6 +460,9 @@ static struct cmdline_option option_data[] =
     { "warc-zstd-dict-no-compression", 0, OPT_BOOLEAN, "warczstddictnocompression", -1 },
 #endif
     { "warc-dedup", 0, OPT_VALUE, "warccdxdedup", -1 },
+    { "warc-dedup-disable", 0, OPT_BOOLEAN, "warcdedupdisable", -1 },
+    { "warc-dedup-min-size", 0, OPT_VALUE, "warcdedupminsize", -1 },
+    { "warc-dedup-url-agnostic", 0, OPT_BOOLEAN, "warcdedupurlagnostic", -1 },
     { "warc-digests", 0, OPT_BOOLEAN, "warcdigests", -1 },
     { "warc-file", 0, OPT_VALUE, "warcfile", -1 },
     { "warc-header", 0, OPT_VALUE, "warcheader", -1 },
@@ -958,6 +961,13 @@ WARC options:\n"),
        --warc-cdx                       write CDX index files\n"),
     N_("\
        --warc-dedup=FILENAME            do not store records listed in this CDX file\n"),
+    N_("\
+       --warc-dedup-disable             disable deduplication of WARC records\n"),
+    N_("\
+       --warc-dedup-url-agnostic        perform URL-agnostic deduplication of WARC records\n"),
+    N_("\
+       --warc-dedup-min-size=NUMBER     minimum payload size to perform deduplication\n\
+                                          (default number of 100)\n"),
 #if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
     N_("\
        --no-warc-compression            do not compress WARC files with GZIP\n"),
@@ -1804,6 +1814,24 @@ for details.\n\n"));
       exit (WGET_EXIT_GENERIC_ERROR);
     }
 #endif
+
+  if (!opt.warc_dedup_disable)
+    {
+      if (opt.warc_dedup_url_agnostic)
+        {
+          fprintf (stderr,
+                   _("Option --warc-dedup-url-agnostic does not work with "
+                     "--warc-dedup-disable.\n"));
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+      else if (opt.warc_dedup_min_size)
+        {
+          fprintf (stderr,
+                   _("Option --warc-dedup-min-size does not work with "
+                     "--warc-dedup-disable.\n"));
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+    }
 
 #ifdef HAVE_LIBZ
   if (opt.always_rest || opt.start_pos >= 0)
