@@ -351,6 +351,9 @@ static const struct {
 #ifdef HAVE_ZSTD
   { "warccompressionusezstd",      &opt.warc_compression_use_zstd, cmd_boolean },
 #endif
+  { "warcdedupdisable", &opt.warc_dedup_disable, cmd_boolean },
+  { "warcdedupminsize", &opt.warc_dedup_min_size, cmd_number },
+  { "warcdedupurlagnostic", &opt.warc_dedup_url_agnostic, cmd_boolean },
   { "warcdigests",      &opt.warc_digests_enabled, cmd_boolean },
   { "warcfile",         &opt.warc_filename,     cmd_file },
   { "warcheader",       NULL,                   cmd_spec_warc_header },
@@ -511,6 +514,9 @@ defaults (void)
 #else
   opt.warc_compression_enabled = false;
 #endif
+  opt.warc_dedup_disable = false;
+  opt.warc_dedup_min_size = 100;
+  opt.warc_dedup_url_agnostic = false;
   opt.warc_digests_enabled = true;
   opt.warc_cdx_enabled = false;
   opt.warc_cdx_dedup_filename = NULL;

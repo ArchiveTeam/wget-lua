@@ -135,6 +135,9 @@ struct options
   char *warc_zstd_dict;
   bool warc_zstd_dict_no_include;
   bool warc_zstd_dict_no_compression;
+  bool warc_dedup_disable;
+  bool warc_dedup_url_agnostic;
+  int warc_dedup_min_size;
 
   bool enable_xattr;            /* Store metadata in POSIX extended attributes. */
 
