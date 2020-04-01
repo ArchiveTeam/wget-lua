@@ -934,6 +934,28 @@ warc_write_warcinfo_record (const char *filename)
 }
 
 #ifdef HAVE_ZSTD
+/* Writes an integer to the WARC file, this is for the ZSTD header.
+   */
+static bool
+warc_write_integer (int num)
+{
+  unsigned char s[4];
+
+  for (int i = 0; i < 4; i++)
+    {
+      s[i] = (unsigned char)(num & 0xff);
+      num >>= 8;
+    }
+
+  if (fwrite(s, 1, 4, warc_current_file) != 4)
+    {
+      logprintf (LOG_NOTQUIET, _("Error writing number of ZST skippable frame.\n"));
+      warc_write_ok = false;
+      return false;
+    }
+}
+
+
 /* Writes the ZSTD dictionary to the WARC file.
 
    The dictionary is stored in a skippable frame. This frame has MAGIC
@@ -951,11 +973,17 @@ warc_write_zstd_dictionary (const char *buffer, size_t size)
       char size_string[4];
       int final_size;
 
-      fwrite ("\x5d\x2a\x4d\x18", 1, 4, warc_current_file);
+      if (fwrite ("\x5d\x2a\x4d\x18", 1, 4, warc_current_file) != 4)
+        {
+          logprintf (LOG_NOTQUIET, _("Error writing magic of skippable ZST frame.\n"));
+          warc_write_ok = false;
+          return false;
+        }
+
       if (opt.warc_zstd_dict_no_compression)
         {
           final_size = (int) size;
-          fwrite (&final_size, sizeof(int), 1, warc_current_file);
+          warc_write_integer (final_size);
           if (fwrite (buffer, 1, size, warc_current_file) != size)
             {
               logprintf (LOG_NOTQUIET, _("Error writing ZST dictionary frame.\n"));
@@ -976,7 +1004,7 @@ warc_write_zstd_dictionary (const char *buffer, size_t size)
               return false;
             }
           final_size = (int) compress_size;
-          fwrite (&final_size, sizeof(int), 1, warc_current_file);
+          warc_write_integer (final_size);
 
           if (fwrite (compress_buffer, 1, compress_size, warc_current_file) != compress_size)
             {
