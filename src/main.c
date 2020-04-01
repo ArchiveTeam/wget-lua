@@ -1815,19 +1815,12 @@ for details.\n\n"));
     }
 #endif
 
-  if (!opt.warc_dedup_disable)
+  if (opt.warc_dedup_disable)
     {
       if (opt.warc_dedup_url_agnostic)
         {
           fprintf (stderr,
                    _("Option --warc-dedup-url-agnostic does not work with "
-                     "--warc-dedup-disable.\n"));
-          exit (WGET_EXIT_GENERIC_ERROR);
-        }
-      else if (opt.warc_dedup_min_size)
-        {
-          fprintf (stderr,
-                   _("Option --warc-dedup-min-size does not work with "
                      "--warc-dedup-disable.\n"));
           exit (WGET_EXIT_GENERIC_ERROR);
         }
