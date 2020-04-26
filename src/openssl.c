@@ -426,44 +426,66 @@ struct openssl_transport_context
   char *last_error;             /* last error printed with openssl_errstr */
 };
 
+typedef int (*ssl_fn_t)(SSL *, void *, int);
+
 struct openssl_read_args
 {
   int fd;
   struct openssl_transport_context *ctx;
+  ssl_fn_t fn;
   char *buf;
   int bufsize;
   int retval;
 };
 
-static void openssl_read_callback(void *arg)
+static void openssl_read_peek_callback(void *arg)
 {
   struct openssl_read_args *args = (struct openssl_read_args *) arg;
   struct openssl_transport_context *ctx = args->ctx;
+  ssl_fn_t fn = args->fn;
   SSL *conn = ctx->conn;
   char *buf = args->buf;
   int bufsize = args->bufsize;
   int ret;
 
   do
-    ret = SSL_read (conn, buf, bufsize);
+    ret = fn (conn, buf, bufsize);
   while (ret == -1 && SSL_get_error (conn, ret) == SSL_ERROR_SYSCALL
          && errno == EINTR);
   args->retval = ret;
 }
 
 static int
-openssl_read (int fd, char *buf, int bufsize, void *arg)
+openssl_read_peek (int fd, char *buf, int bufsize, void *arg, ssl_fn_t fn)
 {
+  struct openssl_transport_context *ctx = arg;
+  int ret = SSL_pending (ctx->conn);
+
+  if (bufsize == 0) {
+    return 0;
+  }
+
+  if (ret) {
+    return fn (ctx->conn, buf, MIN (bufsize, ret));
+  }
+
   struct openssl_read_args args;
   args.fd = fd;
   args.buf = buf;
   args.bufsize = bufsize;
-  args.ctx = (struct openssl_transport_context*) arg;
+  args.fn = fn;
+  args.ctx = ctx;
 
-  if (run_with_timeout(opt.read_timeout, openssl_read_callback, &args)) {
+  if (run_with_timeout(opt.read_timeout, openssl_read_peek_callback, &args)) {
     return -1;
   }
   return args.retval;
+}
+
+static int
+openssl_read (int fd, char *buf, int bufsize, void *arg)
+{
+  return openssl_read_peek (fd, buf, bufsize, arg, SSL_read);
 }
 
 static int
@@ -495,17 +517,7 @@ openssl_poll (int fd, double timeout, int wait_for, void *arg)
 static int
 openssl_peek (int fd, char *buf, int bufsize, void *arg)
 {
-  int ret;
-  struct openssl_transport_context *ctx = arg;
-  SSL *conn = ctx->conn;
-  if (! openssl_poll (fd, 0.0, WAIT_FOR_READ, arg))
-    return 0;
-  do
-    ret = SSL_peek (conn, buf, bufsize);
-  while (ret == -1
-         && SSL_get_error (conn, ret) == SSL_ERROR_SYSCALL
-         && errno == EINTR);
-  return ret;
+  return openssl_read_peek (fd, buf, bufsize, arg, SSL_peek);
 }
 
 static const char *
