@@ -647,6 +647,38 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
                   if (ret)
                     cur->method = strdup (ret);
 
+                  struct luahooks_url_header *header_head = NULL;
+                  lua_getfield (lua, -1, "headers");
+                  if (lua_istable (lua, -1))
+                    {
+                      struct luahooks_url_header *header_cur;
+
+                      lua_pushnil (lua);
+                      while (lua_next (lua, -2) != 0)
+                        {
+                          header_cur = malloc (sizeof (struct luahooks_url_header));
+
+                          header_cur->key = NULL;
+                          header_cur->value = NULL;
+
+                          ret = lua_tostring (lua, -2);
+                          if (ret)
+                            header_cur->key = strdup (ret);
+
+                          ret = lua_tostring (lua, -1);
+                          if (ret)
+                            header_cur->value = strdup (ret);
+
+                          header_cur->next = header_head;
+                          header_head = header_cur;
+
+                          lua_pop (lua, 1);
+                        }
+                    }
+                  lua_pop (lua, 1);
+
+                  cur->headers = header_head;
+
                   cur->next = head;
                   head = cur;
                 }

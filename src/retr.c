@@ -875,6 +875,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
   char *saved_body_data = NULL;
   char *saved_method = NULL;
   char *saved_body_file_name = NULL;
+  char **saved_user_headers = NULL;
 
   /* If dt is NULL, use local storage.  */
   if (!dt)

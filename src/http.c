@@ -201,6 +201,29 @@ release_header (struct request_header *hdr)
     }
 }
 
+/* Remove the header with specified name from REQ.  Returns true if
+   the header was actually removed, false otherwise.  */
+
+static bool
+request_remove_header (struct request *req, const char *name)
+{
+  int i;
+  for (i = 0; i < req->hcount; i++)
+    {
+      struct request_header *hdr = &req->headers[i];
+      if (0 == c_strcasecmp (name, hdr->name))
+        {
+          release_header (hdr);
+          /* Move the remaining headers by one. */
+          if (i < req->hcount - 1)
+            memmove (hdr, hdr + 1, (req->hcount - i - 1) * sizeof (*hdr));
+          --req->hcount;
+          return true;
+        }
+    }
+  return false;
+}
+
 /* Set the request named NAME to VALUE.  Specifically, this means that
    a "NAME: VALUE\r\n" header line will be used in the request.  If a
    header with the same name previously existed in the request, its
@@ -250,6 +273,12 @@ request_set_header (struct request *req, const char *name, const char *value,
       hdr = &req->headers[i];
       if (0 == c_strcasecmp (name, hdr->name))
         {
+          if (strlen (value) == 0)
+            {
+              /* Remove existing header. */
+              request_remove_header (req, hdr->name);
+              return;
+            }
           /* Replace existing header. */
           release_header (hdr);
           hdr->name = (void *)name;
@@ -292,29 +321,6 @@ request_set_user_header (struct request *req, const char *header)
     ++p;
 
   request_set_header (req, name, p, rel_name);
-}
-
-/* Remove the header with specified name from REQ.  Returns true if
-   the header was actually removed, false otherwise.  */
-
-static bool
-request_remove_header (struct request *req, const char *name)
-{
-  int i;
-  for (i = 0; i < req->hcount; i++)
-    {
-      struct request_header *hdr = &req->headers[i];
-      if (0 == c_strcasecmp (name, hdr->name))
-        {
-          release_header (hdr);
-          /* Move the remaining headers by one. */
-          if (i < req->hcount - 1)
-            memmove (hdr, hdr + 1, (req->hcount - i - 1) * sizeof (*hdr));
-          --req->hcount;
-          return true;
-        }
-    }
-  return false;
 }
 
 #define APPEND(p, str) do {                     \
