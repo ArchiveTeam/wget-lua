@@ -66,6 +66,7 @@ struct queue_element {
                                    be treated as CSS. */
   const char *body_data;        /* POST query string */
   const char *method;           /* HTTP method */
+  struct luahooks_url_header *headers; /* extra HTTP headers */
   struct queue_element *next;   /* next element in queue */
 };
 
@@ -100,7 +101,8 @@ static void
 url_enqueue (struct url_queue *queue, struct iri *i,
              const char *url, const char *referer, int depth,
              bool html_allowed, bool css_allowed,
-             const char *body_data, const char *method)
+             const char *body_data, const char *method,
+             struct luahooks_url_header *headers)
 {
   struct queue_element *qel = xnew (struct queue_element);
   qel->iri = i;
@@ -111,6 +113,7 @@ url_enqueue (struct url_queue *queue, struct iri *i,
   qel->css_allowed = css_allowed;
   qel->body_data = body_data;
   qel->method = method;
+  qel->headers = headers;
   qel->next = NULL;
 
   ++queue->count;
@@ -140,7 +143,7 @@ static bool
 url_dequeue (struct url_queue *queue, struct iri **i,
              const char **url, const char **referer, int *depth,
              bool *html_allowed, bool *css_allowed, const char **body_data,
-             const char **method)
+             const char **method, struct luahooks_url_header **headers)
 {
   struct queue_element *qel = queue->head;
 
@@ -159,6 +162,7 @@ url_dequeue (struct url_queue *queue, struct iri **i,
   *css_allowed = qel->css_allowed;
   *body_data = qel->body_data;
   *method = qel->method;
+  *headers = qel->headers;
 
   --queue->count;
 
@@ -256,7 +260,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
   /* Enqueue the starting URL.  Use start_url_parsed->url rather than
      just URL so we enqueue the canonical form of the URL.  */
   url_enqueue (queue, i, xstrdup (start_url_parsed->url), NULL, 0, true,
-               false, NULL, NULL);
+               false, NULL, NULL, NULL);
   blacklist_add (blacklist, start_url_parsed->url);
 
   if (opt.rejected_log)
@@ -278,10 +282,17 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       bool is_css = false;
       bool dash_p_leaf_HTML = false;
 
+      struct luahooks_url_header *headers = NULL;
+      struct luahooks_url_header *header_cur = NULL;
+      char *header_join = ": ";
+      char *header;
+
       bool method_suspended = false;
       char *saved_body_data = NULL;
       char *saved_body_file_name = NULL;
       char *saved_method = NULL;
+      char **saved_user_headers = NULL;
+
 
       if (opt.quota && total_downloaded_bytes > opt.quota)
         break;
@@ -294,7 +305,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                         (const char **)&url, (const char **)&referer,
                         &depth, &html_allowed, &css_allowed,
                         (const char **)&body_data,
-                        (const char **)&method))
+                        (const char **)&method,
+                        (struct luahooks_url_header **)&headers))
         break;
 
       /* ...and download it.  Note that this download is in most cases
@@ -342,16 +354,45 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
           else
             {
 
-              if (body_data)
+              if (body_data || headers)
                 {
                   SUSPEND_METHOD;
+                }
+
+              if (body_data)
+                {
                   opt.body_data = body_data;
                   opt.body_file = NULL;
                   opt.method = method;
                 }
 
+              if (headers)
+                {
+                  header_cur = headers;
+
+                  do
+                    {
+                      header = xmalloc (strlen(header_cur->key)
+                                        +strlen(header_cur->value)+2+1);
+
+                      strcpy (header, header_cur->key);
+                      strcat (header, header_join);
+                      strcat (header, header_cur->value);
+
+                      opt.user_headers = vec_append (opt.user_headers, header);
+
+                      xfree (header);
+
+                      header_cur = header_cur->next;
+                    } while (header_cur != NULL);
+                }
+
               status = retrieve_url (url_parsed, url, &file, &redirected, referer,
                                      &dt, false, i, true);
+
+              if (headers)
+                free_vec (opt.user_headers);
+                opt.user_headers = NULL;
 
               opt.body_data = NULL;
               opt.body_file = NULL;
@@ -502,7 +543,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                                    xstrdup (referer_url), depth + 1,
                                    child->link_expect_html,
                                    child->link_expect_css,
-                                   NULL, NULL);
+                                   NULL, NULL, NULL);
                       /* We blacklist the URL we have enqueued, because we
                          don't want to enqueue (and hence download) the
                          same URL twice.  */
@@ -523,6 +564,7 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
 
       struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
       struct luahooks_url *lh_url = luahooks_urls;
+      struct luahooks_url_header *lh_headers = NULL;
       while (lh_url != NULL)
         {
           if (lh_url->body_data || ! string_set_contains (blacklist, lh_url->url))
@@ -538,15 +580,16 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                            lh_url->link_expect_html,
                            lh_url->link_expect_css,
                            lh_url->body_data,
-                           lh_url->method);
+                           lh_url->method,
+                           lh_url->headers);
               /* We blacklist the URL we have enqueued, because we
                  don't want to enqueue (and hence download) the
                  same URL twice.  */
               string_set_add (blacklist, lh_url->url);
             }
-          
+
           struct luahooks_url *next_lh_url = lh_url->next;
-          free (lh_url);
+          xfree (lh_url);
           lh_url = next_lh_url;
         }
 
@@ -595,15 +638,26 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
     int d3;
     bool d4, d5;
     struct iri *d6;
+    struct luahooks_url_header *d9;
+    struct luahooks_url_header *d9_next;
     while (url_dequeue (queue, (struct iri **)&d6,
                         (const char **)&d1, (const char **)&d2, &d3, &d4,
-                        &d5, (const char **)&d7, (const char **)&d8))
+                        &d5, (const char **)&d7, (const char **)&d8,
+                        (struct luahooks_url_header **)&d9))
       {
         iri_free (d6);
         xfree (d1);
         xfree (d2);
         xfree (d7);
         xfree (d8);
+        while (d9)
+          {
+            d9_next = d9->next;
+            xfree(d9->key);
+            xfree(d9->value);
+            xfree(d9);
+            d9 = d9_next;
+          }
       }
   }
   url_queue_delete (queue);

@@ -83,9 +83,11 @@ bool input_file_url (const char *);
   saved_body_data = opt.body_data;              \
   saved_body_file_name = opt.body_file;         \
   saved_method = opt.method;                    \
+  saved_user_headers = opt.user_headers;        \
   opt.body_data = NULL;                         \
   opt.body_file = NULL;                         \
   opt.method = NULL;                            \
+  opt.user_headers = NULL;                      \
 } while (0)
 
 #define RESTORE_METHOD do {                             \
@@ -94,6 +96,7 @@ bool input_file_url (const char *);
       opt.body_data = saved_body_data;                  \
       opt.body_file = saved_body_file_name;             \
       opt.method = saved_method;                        \
+      opt.user_headers = saved_user_headers;            \
       method_suspended = false;                         \
     }                                                   \
 } while (0)

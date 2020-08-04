@@ -13,6 +13,13 @@ typedef enum
   LUAHOOK_ABORT
 } luahook_action_t;
 
+struct luahooks_url_header
+{
+  char *key;
+  char *value;
+  struct luahooks_url_header *next;
+};
+
 struct luahooks_url
 {
   const char *url;
@@ -20,6 +27,7 @@ struct luahooks_url
   unsigned int link_expect_css;
   char *body_data;
   char *method;
+  struct luahooks_url_header *headers;
   struct luahooks_url *next;
 };
 
