@@ -1627,15 +1627,17 @@ File %s already there; not retrieving.\n\n"), quote (filename));
 static int
 read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
                     wgint contrange, bool chunked_transfer_encoding,
-                    char *url, char *warc_timestamp_str, char *warc_request_uuid,
-                    ip_address *warc_ip, char *type, int statcode, char *head)
+                    const struct url *u, char *warc_timestamp_str,
+                    char *warc_request_uuid, ip_address *warc_ip, char *type,
+                    int statcode, char *head)
 {
   int warc_payload_offset = 0;
   FILE *warc_tmp = NULL;
   int warcerr = 0;
   int flags = 0;
+  char *url = u->url;
 
-  if (opt.warc_filename != NULL)
+  if (opt.warc_filename != NULL && luahooks_write_to_warc (u, hs))
     {
       /* Open a temporary file where we can write the response before we
          add it to the WARC record.  */
@@ -3446,6 +3448,108 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
   xfree (hs->message);
   hs->message = xstrdup (message);
+
+  hs->statcode = statcode;
+  if (statcode == -1)
+    hs->error = xstrdup (_("Malformed status line"));
+  else if (!*message)
+    hs->error = xstrdup (_("(no description)"));
+  else
+    hs->error = xstrdup (message);
+
+  xfree (hs->newloc);
+  hs->newloc = resp_header_strdup (resp, "Location");
+  xfree (hs->remote_time);
+  hs->remote_time = resp_header_strdup (resp, "Last-Modified");
+  if (!hs->remote_time) // now look for the Wayback Machine's timestamp
+    hs->remote_time = resp_header_strdup (resp, "X-Archive-Orig-last-modified");
+
+  if (resp_header_copy (resp, "Content-Encoding", hdrval, sizeof (hdrval)))
+    {
+      hs->local_encoding = ENC_INVALID;
+
+      switch (hdrval[0])
+        {
+        case 'b': case 'B':
+          if (0 == c_strcasecmp(hdrval, "br"))
+            hs->local_encoding = ENC_BROTLI;
+          break;
+        case 'c': case 'C':
+          if (0 == c_strcasecmp(hdrval, "compress"))
+            hs->local_encoding = ENC_COMPRESS;
+          break;
+        case 'd': case 'D':
+          if (0 == c_strcasecmp(hdrval, "deflate"))
+            hs->local_encoding = ENC_DEFLATE;
+          break;
+        case 'g': case 'G':
+          if (0 == c_strcasecmp(hdrval, "gzip"))
+            hs->local_encoding = ENC_GZIP;
+          break;
+        case 'i': case 'I':
+          if (0 == c_strcasecmp(hdrval, "identity"))
+            hs->local_encoding = ENC_NONE;
+          break;
+        case 'x': case 'X':
+          if (0 == c_strcasecmp(hdrval, "x-compress"))
+            hs->local_encoding = ENC_COMPRESS;
+          else if (0 == c_strcasecmp(hdrval, "x-gzip"))
+            hs->local_encoding = ENC_GZIP;
+          break;
+        case '\0':
+          hs->local_encoding = ENC_NONE;
+        }
+
+      if (hs->local_encoding == ENC_INVALID)
+        {
+          DEBUGP (("Unrecognized Content-Encoding: %s\n", hdrval));
+          hs->local_encoding = ENC_NONE;
+        }
+#ifdef HAVE_LIBZ
+      else if (hs->local_encoding == ENC_GZIP
+               && opt.compression != compression_none)
+        {
+          const char *p;
+
+          /* Make sure the Content-Type is not gzip before decompressing */
+          if (type)
+            {
+              p = strchr (type, '/');
+              if (p == NULL)
+                {
+                  hs->remote_encoding = ENC_GZIP;
+                  hs->local_encoding = ENC_NONE;
+                }
+              else
+                {
+                  p++;
+                  if (c_tolower(p[0]) == 'x' && p[1] == '-')
+                    p += 2;
+                  if (0 != c_strcasecmp (p, "gzip"))
+                    {
+                      hs->remote_encoding = ENC_GZIP;
+                      hs->local_encoding = ENC_NONE;
+                    }
+                }
+            }
+          else
+            {
+               hs->remote_encoding = ENC_GZIP;
+               hs->local_encoding = ENC_NONE;
+            }
+
+          /* don't uncompress if a file ends with '.gz' or '.tgz' */
+          if (hs->remote_encoding == ENC_GZIP
+              && (p = strrchr(u->file, '.'))
+              && (c_strcasecmp(p, ".gz") == 0 || c_strcasecmp(p, ".tgz") == 0))
+            {
+               DEBUGP (("Enabling broken server workaround. Will not decompress this GZip file.\n"));
+               hs->remote_encoding = ENC_NONE;
+            }
+        }
+#endif
+    }
+
   if (!opt.server_response)
     logprintf (LOG_VERBOSE, "%2d %s\n", statcode,
                message ? quotearg_style (escape_quoting_style, message) : "");
@@ -3554,13 +3658,13 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       bool retry;
       /* Normally we are not interested in the response body.
          But if we are writing a WARC file we are: we like to keep everything.  */
-      if (warc_enabled)
+      if (warc_enabled && luahooks_write_to_warc (u, hs))
         {
           int _err;
           type = resp_header_strdup (resp, "Content-Type");
           _err = read_response_body (hs, sock, NULL, contlen, 0,
                                     chunked_transfer_encoding,
-                                    u->url, warc_timestamp_str,
+                                    u, warc_timestamp_str,
                                     warc_request_uuid, warc_ip, type,
                                     statcode, head);
           xfree (type);
@@ -3621,15 +3725,6 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       }
   }
 
-  hs->statcode = statcode;
-  xfree (hs->error);
-  if (statcode == -1)
-    hs->error = xstrdup (_("Malformed status line"));
-  else if (!message || !*message)
-    hs->error = xstrdup (_("(no description)"));
-  else
-    hs->error = xstrdup (message);
-
 #ifdef HAVE_HSTS
   if (opt.hsts && hsts_store)
     {
@@ -3681,12 +3776,6 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 #endif
         }
     }
-  xfree (hs->newloc);
-  hs->newloc = resp_header_strdup (resp, "Location");
-  xfree (hs->remote_time);
-  hs->remote_time = resp_header_strdup (resp, "Last-Modified");
-  if (!hs->remote_time) // now look for the Wayback Machine's timestamp
-    hs->remote_time = resp_header_strdup (resp, "X-Archive-Orig-last-modified");
 
   if (resp_header_copy (resp, "Content-Range", hdrval, sizeof (hdrval)))
     {
@@ -3697,92 +3786,6 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           contrange = first_byte_pos;
           contlen = last_byte_pos - first_byte_pos + 1;
         }
-    }
-
-  if (resp_header_copy (resp, "Content-Encoding", hdrval, sizeof (hdrval)))
-    {
-      hs->local_encoding = ENC_INVALID;
-
-      switch (hdrval[0])
-        {
-        case 'b': case 'B':
-          if (0 == c_strcasecmp(hdrval, "br"))
-            hs->local_encoding = ENC_BROTLI;
-          break;
-        case 'c': case 'C':
-          if (0 == c_strcasecmp(hdrval, "compress"))
-            hs->local_encoding = ENC_COMPRESS;
-          break;
-        case 'd': case 'D':
-          if (0 == c_strcasecmp(hdrval, "deflate"))
-            hs->local_encoding = ENC_DEFLATE;
-          break;
-        case 'g': case 'G':
-          if (0 == c_strcasecmp(hdrval, "gzip"))
-            hs->local_encoding = ENC_GZIP;
-          break;
-        case 'i': case 'I':
-          if (0 == c_strcasecmp(hdrval, "identity"))
-            hs->local_encoding = ENC_NONE;
-          break;
-        case 'x': case 'X':
-          if (0 == c_strcasecmp(hdrval, "x-compress"))
-            hs->local_encoding = ENC_COMPRESS;
-          else if (0 == c_strcasecmp(hdrval, "x-gzip"))
-            hs->local_encoding = ENC_GZIP;
-          break;
-        case '\0':
-          hs->local_encoding = ENC_NONE;
-        }
-
-      if (hs->local_encoding == ENC_INVALID)
-        {
-          DEBUGP (("Unrecognized Content-Encoding: %s\n", hdrval));
-          hs->local_encoding = ENC_NONE;
-        }
-#ifdef HAVE_LIBZ
-      else if (hs->local_encoding == ENC_GZIP
-               && opt.compression != compression_none)
-        {
-          const char *p;
-
-          /* Make sure the Content-Type is not gzip before decompressing */
-          if (type)
-            {
-              p = strchr (type, '/');
-              if (p == NULL)
-                {
-                  hs->remote_encoding = ENC_GZIP;
-                  hs->local_encoding = ENC_NONE;
-                }
-              else
-                {
-                  p++;
-                  if (c_tolower(p[0]) == 'x' && p[1] == '-')
-                    p += 2;
-                  if (0 != c_strcasecmp (p, "gzip"))
-                    {
-                      hs->remote_encoding = ENC_GZIP;
-                      hs->local_encoding = ENC_NONE;
-                    }
-                }
-            }
-          else
-            {
-               hs->remote_encoding = ENC_GZIP;
-               hs->local_encoding = ENC_NONE;
-            }
-
-          /* don't uncompress if a file ends with '.gz' or '.tgz' */
-          if (hs->remote_encoding == ENC_GZIP
-              && (p = strrchr(u->file, '.'))
-              && (c_strcasecmp(p, ".gz") == 0 || c_strcasecmp(p, ".tgz") == 0))
-            {
-               DEBUGP (("Enabling broken server workaround. Will not decompress this GZip file.\n"));
-               hs->remote_encoding = ENC_NONE;
-            }
-        }
-#endif
     }
 
   /* 20x responses are counted among successful by default.  */
@@ -3828,11 +3831,11 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
           /* Normally we are not interested in the response body of a redirect.
              But if we are writing a WARC file we are: we like to keep everything.  */
-          if (warc_enabled)
+          if (warc_enabled && luahooks_write_to_warc (u, hs))
             {
               int _err = read_response_body (hs, sock, NULL, contlen, 0,
                                             chunked_transfer_encoding,
-                                            u->url, warc_timestamp_str,
+                                            u, warc_timestamp_str,
                                             warc_request_uuid, warc_ip, type,
                                             statcode, head);
 
@@ -4076,11 +4079,11 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
       /* Normally we are not interested in the response body of a error responses.
          But if we are writing a WARC file we are: we like to keep everything.  */
-      if (warc_enabled)
+      if (warc_enabled && luahooks_write_to_warc (u, hs))
         {
           int _err = read_response_body (hs, sock, NULL, contlen, 0,
                                         chunked_transfer_encoding,
-                                        u->url, warc_timestamp_str,
+                                        u, warc_timestamp_str,
                                         warc_request_uuid, warc_ip, type,
                                         statcode, head);
 
@@ -4158,7 +4161,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
   err = read_response_body (hs, sock, fp, contlen, contrange,
                             chunked_transfer_encoding,
-                            u->url, warc_timestamp_str,
+                            u, warc_timestamp_str,
                             warc_request_uuid, warc_ip, type,
                             statcode, head);
 
