@@ -525,6 +525,29 @@ luahooks_httploop_result (const struct url *url, const uerr_t err, const struct 
 }
 
 bool
+luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "write_to_warc"))
+    return true;
+
+  url_to_lua_table (url);
+  http_stat_to_lua_table (hstat);
+
+  int res = lua_pcall (lua, 2, 1, 0);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return true;
+    }
+  else
+    {
+      bool answer = lua_toboolean (lua, -1);
+      lua_pop (lua, 1);
+      return answer;
+    }
+}
+
+bool
 luahooks_download_child (const struct urlpos *upos, struct url *parent, int depth,
                          struct url *start_url_parsed, struct iri *iri,
                          reject_reason reason)
