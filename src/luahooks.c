@@ -489,7 +489,7 @@ luahooks_lookup_host (const char *host)
         return NULL;
 
       /* Copy to the buffer. */
-      size_t ret_l = lua_strlen(lua, -1);
+      size_t ret_l = lua_strlen(lua, -1) + 1;
       ret_l = (ret_l <= MAX_HOST_LENGTH) ? ret_l : MAX_HOST_LENGTH;
       strncpy (lookup_host_result, ret, ret_l);
 
