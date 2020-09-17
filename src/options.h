@@ -189,6 +189,8 @@ struct options
                                    file? */
   bool content_on_error;        /* Do we output the content when the HTTP
                                    status code indicates a server error */
+  bool content_on_redirect;     /* Do we output the content when the HTTP
+                                   status code indicates a redirect */
 
   bool debug;                   /* Debugging on/off */
 

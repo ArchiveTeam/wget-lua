@@ -3746,7 +3746,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       goto cleanup;
     }
 
-  /* Return if redirected.  */
+  /* Maybe return if redirected.  */
   if (H_REDIRECTED (statcode) || statcode == HTTP_STATUS_MULTIPLE_CHOICES)
     {
       /* RFC2068 says that in case of the 300 (multiple choices)
@@ -3763,38 +3763,41 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
                      hs->newloc ? escnonprint_uri (hs->newloc) : _("unspecified"),
                      hs->newloc ? _(" [following]") : "");
 
-          /* In case the caller cares to look...  */
-          hs->len = 0;
-          hs->res = 0;
-          hs->restval = 0;
-
-          /* Normally we are not interested in the response body of a redirect.
-             But if we are writing a WARC file we are: we like to keep everything.  */
-          if (warc_enabled && luahooks_write_to_warc (u, hs))
+          if (!opt.content_on_redirect)
             {
-              int _err = read_response_body (hs, sock, NULL, contlen, 0,
-                                            chunked_transfer_encoding,
-                                            u, warc_timestamp_str,
-                                            warc_request_uuid, warc_ip, type,
-                                            statcode, head);
+              /* In case the caller cares to look...  */
+              hs->len = 0;
+              hs->res = 0;
+              hs->restval = 0;
 
-              if (_err != RETRFINISHED || hs->res < 0)
+              /* Normally we are not interested in the response body of a redirect.
+                 But if we are writing a WARC file we are: we like to keep everything.  */
+              if (warc_enabled && luahooks_write_to_warc (u, hs))
                 {
-                  CLOSE_INVALIDATE (sock);
-                  retval = _err;
-                  goto cleanup;
+                  int _err = read_response_body (hs, sock, NULL, contlen, 0,
+                                                chunked_transfer_encoding,
+                                                u, warc_timestamp_str,
+                                                warc_request_uuid, warc_ip, type,
+                                                statcode, head);
+
+                  if (_err != RETRFINISHED || hs->res < 0)
+                    {
+                      CLOSE_INVALIDATE (sock);
+                      retval = _err;
+                      goto cleanup;
+                    }
+                  else
+                    CLOSE_FINISH (sock);
                 }
               else
-                CLOSE_FINISH (sock);
-            }
-          else
-            {
-              /* Since WARC is disabled, we are not interested in the response body.  */
-              if (keep_alive && !head_only
-                  && skip_short_body (sock, contlen, chunked_transfer_encoding))
-                CLOSE_FINISH (sock);
-              else
-                CLOSE_INVALIDATE (sock);
+                {
+                  /* Since WARC is disabled, we are not interested in the response body.  */
+                  if (keep_alive && !head_only
+                      && skip_short_body (sock, contlen, chunked_transfer_encoding))
+                    CLOSE_FINISH (sock);
+                  else
+                    CLOSE_INVALIDATE (sock);
+                }
             }
 
           /* From RFC2616: The status codes 303 and 307 have
@@ -3817,24 +3820,28 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
             case HTTP_STATUS_TEMPORARY_REDIRECT:
             case HTTP_STATUS_PERMANENT_REDIRECT:
               retval = NEWLOCATION_KEEP_POST;
-              goto cleanup;
+              if (!opt.content_on_redirect)
+                goto cleanup;
             case HTTP_STATUS_MOVED_PERMANENTLY:
               if (opt.method && c_strcasecmp (opt.method, "post") != 0)
                 {
                   retval = NEWLOCATION_KEEP_POST;
-                  goto cleanup;
+                  if (!opt.content_on_redirect)
+                    goto cleanup;
                 }
               break;
             case HTTP_STATUS_MOVED_TEMPORARILY:
               if (opt.method && c_strcasecmp (opt.method, "post") != 0)
                 {
                   retval = NEWLOCATION_KEEP_POST;
-                  goto cleanup;
+                  if (!opt.content_on_redirect)
+                    goto cleanup;
                 }
               break;
             }
           retval = NEWLOCATION;
-          goto cleanup;
+          if (!opt.content_on_redirect)
+            goto cleanup;
         }
     }
 
