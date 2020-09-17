@@ -298,6 +298,7 @@ static struct cmdline_option option_data[] =
     { "convert-links", 'k', OPT_BOOLEAN, "convertlinks", -1 },
     { "content-disposition", 0, OPT_BOOLEAN, "contentdisposition", -1 },
     { "content-on-error", 0, OPT_BOOLEAN, "contentonerror", -1 },
+    { "content-on-redirect", 0, OPT_BOOLEAN, "contentonredirect", -1 },
     { "cookies", 0, OPT_BOOLEAN, "cookies", -1 },
     IF_SSL ( "crl-file", 0, OPT_VALUE, "crlfile", -1 )
     { "cut-dirs", 0, OPT_VALUE, "cutdirs", -1 },
@@ -852,6 +853,8 @@ HTTP options:\n"),
                                      choosing local file names (EXPERIMENTAL)\n"),
     N_("\
        --content-on-error          output the received content on server errors\n"),
+    N_("\
+       --content-on-redirect       output the received content on redirects\n"),
     N_("\
        --auth-no-challenge         send Basic HTTP authentication information\n\
                                      without first waiting for the server's\n\

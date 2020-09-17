@@ -172,6 +172,7 @@ static const struct {
   { "connecttimeout",   &opt.connect_timeout,   cmd_time },
   { "contentdisposition", &opt.content_disposition, cmd_boolean },
   { "contentonerror",   &opt.content_on_error,  cmd_boolean },
+  { "contentonredirect", &opt.content_on_redirect,  cmd_boolean },
   { "continue",         &opt.always_rest,       cmd_boolean },
   { "convertfileonly",  &opt.convert_file_only, cmd_boolean },
   { "convertlinks",     &opt.convert_links,     cmd_boolean },
