@@ -1621,9 +1621,10 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   FILE *warc_tmp = NULL;
   int warcerr = 0;
   int flags = 0;
+  bool write_to_warc = true;
   char *url = u->url;
 
-  if (opt.warc_filename != NULL && luahooks_write_to_warc (u, hs))
+  if (opt.warc_filename != NULL)
     {
       /* Open a temporary file where we can write the response before we
          add it to the WARC record.  */
@@ -1681,9 +1682,12 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   hs->res = fd_read_body (hs->local_file, sock, fp, contlen != -1 ? contlen : 0,
                           hs->restval, &hs->rd_size, &hs->len, &hs->dltime,
                           flags, warc_tmp);
+
+  write_to_warc = luahooks_write_to_warc (u, hs);
+
   if (hs->res >= 0)
     {
-      if (warc_tmp != NULL)
+      if (warc_tmp != NULL && write_to_warc)
         {
           /* Create a response record and write it to the WARC file.
              Note: per the WARC standard, the request and response should share
@@ -3597,7 +3601,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       bool retry;
       /* Normally we are not interested in the response body.
          But if we are writing a WARC file we are: we like to keep everything.  */
-      if (warc_enabled && luahooks_write_to_warc (u, hs))
+      if (warc_enabled)
         {
           int _err;
           type = resp_header_strdup (resp, "Content-Type");
@@ -3772,7 +3776,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
               /* Normally we are not interested in the response body of a redirect.
                  But if we are writing a WARC file we are: we like to keep everything.  */
-              if (warc_enabled && luahooks_write_to_warc (u, hs))
+              if (warc_enabled)
                 {
                   int _err = read_response_body (hs, sock, NULL, contlen, 0,
                                                 chunked_transfer_encoding,
@@ -4025,7 +4029,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
       /* Normally we are not interested in the response body of a error responses.
          But if we are writing a WARC file we are: we like to keep everything.  */
-      if (warc_enabled && luahooks_write_to_warc (u, hs))
+      if (warc_enabled)
         {
           int _err = read_response_body (hs, sock, NULL, contlen, 0,
                                         chunked_transfer_encoding,
