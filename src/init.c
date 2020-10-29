@@ -358,6 +358,7 @@ static const struct {
   { "warcdigests",      &opt.warc_digests_enabled, cmd_boolean },
   { "warcfile",         &opt.warc_filename,     cmd_file },
   { "warcheader",       NULL,                   cmd_spec_warc_header },
+  { "warcitemname",     &opt.warc_item_name,    cmd_string },
   { "warckeeplog",      &opt.warc_keep_log,     cmd_boolean },
   { "warcmaxsize",      &opt.warc_maxsize,      cmd_bytes },
   { "warctempdir",      &opt.warc_tempdir,      cmd_directory },
@@ -523,6 +524,7 @@ defaults (void)
   opt.warc_cdx_dedup_filename = NULL;
   opt.warc_tempdir = NULL;
   opt.warc_keep_log = true;
+  opt.warc_item_name = NULL;
 
   /* Use a negative value to mark the absence of --start-pos option */
   opt.start_pos = -1;
@@ -1991,6 +1993,7 @@ cleanup (void)
   xfree (opt.warc_zstd_dict);
   xfree (opt.warc_tempdir);
   xfree (opt.warc_cdx_dedup_filename);
+  xfree (opt.warc_item_name);
   xfree (opt.ftp_user);
   xfree (opt.ftp_passwd);
   xfree (opt.ftp_proxy);

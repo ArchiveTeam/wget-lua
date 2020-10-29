@@ -138,6 +138,7 @@ struct options
   bool warc_dedup_disable;
   bool warc_dedup_url_agnostic;
   int warc_dedup_min_size;
+  char *warc_item_name;
 
   bool enable_xattr;            /* Store metadata in POSIX extended attributes. */
 

@@ -469,6 +469,7 @@ static struct cmdline_option option_data[] =
     { "warc-keep-log", 0, OPT_BOOLEAN, "warckeeplog", -1 },
     { "warc-max-size", 0, OPT_VALUE, "warcmaxsize", -1 },
     { "warc-tempdir", 0, OPT_VALUE, "warctempdir", -1 },
+    { "warc-item-name", 0, OPT_VALUE, "warcitemname", -1 },
 #ifdef USE_WATT32
     { "wdebug", 0, OPT_BOOLEAN, "wdebug", -1 },
 #endif
@@ -956,6 +957,8 @@ WARC options:\n"),
        --warc-file=FILENAME             save request/response data to a .warc.gz file\n"),
     N_("\
        --warc-header=STRING             insert STRING into the warcinfo record\n"),
+    N_("\
+       --warc-item-name=STRING          the item name to store in the WARC headers\n"),
     N_("\
        --warc-max-size=NUMBER           set maximum size of WARC files to NUMBER\n"),
     N_("\
@@ -2210,70 +2213,75 @@ only if outputting to a regular file.\n"));
   /* Retrieve the URLs from argument list.  */
   for (t = url; *t; t++)
     {
-      char *filename = NULL, *redirected_URL = NULL;
-      int dt, url_err;
-      /* Need to do a new struct iri every time, because
-       * retrieve_url may modify it in some circumstances,
-       * currently. */
-      struct iri *iri = iri_new ();
-      struct url *url_parsed;
+      if (strlen (*t) >= 12 && strncmp ("item-name://", *t, 12) == 0)
+        /* Set the current item name */
+        opt.warc_item_name = *t + 12;
+      else {
+        char *filename = NULL, *redirected_URL = NULL;
+        int dt, url_err;
+        /* Need to do a new struct iri every time, because
+         * retrieve_url may modify it in some circumstances,
+         * currently. */
+        struct iri *iri = iri_new ();
+        struct url *url_parsed;
 
-      set_uri_encoding (iri, opt.locale, true);
-      url_parsed = url_parse (*t, &url_err, iri, true);
+        set_uri_encoding (iri, opt.locale, true);
+        url_parsed = url_parse (*t, &url_err, iri, true);
 
-      if (!url_parsed)
-        {
-          char *error = url_error (*t, url_err);
-          logprintf (LOG_NOTQUIET, "%s: %s.\n",*t, error);
-          xfree (error);
-          inform_exit_status (URLERROR);
-        }
-      else
-        {
-          /* Request credentials if use_askpass is set. */
-          if (opt.use_askpass)
-            use_askpass (url_parsed);
+        if (!url_parsed)
+          {
+            char *error = url_error (*t, url_err);
+            logprintf (LOG_NOTQUIET, "%s: %s.\n",*t, error);
+            xfree (error);
+            inform_exit_status (URLERROR);
+          }
+        else
+          {
+            /* Request credentials if use_askpass is set. */
+            if (opt.use_askpass)
+              use_askpass (url_parsed);
 
-          if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
-              && ((url_scheme (*t) != SCHEME_FTP
-#ifdef HAVE_SSL
-              && url_scheme (*t) != SCHEME_FTPS
-#endif
-              )
-                  || url_uses_proxy (url_parsed)))
-            {
-              int old_follow_ftp = opt.follow_ftp;
+            if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
+                && ((url_scheme (*t) != SCHEME_FTP
+  #ifdef HAVE_SSL
+                && url_scheme (*t) != SCHEME_FTPS
+  #endif
+                )
+                    || url_uses_proxy (url_parsed)))
+              {
+                int old_follow_ftp = opt.follow_ftp;
 
-              /* Turn opt.follow_ftp on in case of recursive FTP retrieval */
-              if (url_scheme (*t) == SCHEME_FTP
-#ifdef HAVE_SSL
-                  || url_scheme (*t) == SCHEME_FTPS
-#endif
-                  )
-                opt.follow_ftp = 1;
+                /* Turn opt.follow_ftp on in case of recursive FTP retrieval */
+                if (url_scheme (*t) == SCHEME_FTP
+  #ifdef HAVE_SSL
+                    || url_scheme (*t) == SCHEME_FTPS
+  #endif
+                    )
+                  opt.follow_ftp = 1;
 
-              retrieve_tree (url_parsed, NULL);
+                retrieve_tree (url_parsed, NULL);
 
-              opt.follow_ftp = old_follow_ftp;
-            }
-          else
-            {
-              retrieve_url (url_parsed, *t, &filename, &redirected_URL, NULL,
-                            &dt, opt.recursive, iri, true);
-            }
+                opt.follow_ftp = old_follow_ftp;
+              }
+            else
+              {
+                retrieve_url (url_parsed, *t, &filename, &redirected_URL, NULL,
+                              &dt, opt.recursive, iri, true);
+              }
 
-          if (opt.delete_after && filename != NULL && file_exists_p (filename, NULL))
-            {
-              DEBUGP (("Removing file due to --delete-after in main():\n"));
-              logprintf (LOG_VERBOSE, _("Removing %s.\n"), filename);
-              if (unlink (filename))
-                logprintf (LOG_NOTQUIET, "unlink: %s\n", strerror (errno));
-            }
-          xfree (redirected_URL);
-          xfree (filename);
-          url_free (url_parsed);
-        }
-      iri_free (iri);
+            if (opt.delete_after && filename != NULL && file_exists_p (filename, NULL))
+              {
+                DEBUGP (("Removing file due to --delete-after in main():\n"));
+                logprintf (LOG_VERBOSE, _("Removing %s.\n"), filename);
+                if (unlink (filename))
+                  logprintf (LOG_NOTQUIET, "unlink: %s\n", strerror (errno));
+              }
+            xfree (redirected_URL);
+            xfree (filename);
+            url_free (url_parsed);
+          }
+        iri_free (iri);
+      }
     }
 
   /* And then from the input file, if any.  */
