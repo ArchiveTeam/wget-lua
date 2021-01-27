@@ -4,8 +4,6 @@ name: default
 steps:
 - name: docker
   image: plugins/docker
-  environment:
-    SSLTYPE=openssl
   settings:
     registry: atdr-writer.meo.ws
     username:
@@ -18,12 +16,10 @@ steps:
     auto_tag: false
     tags:
     - ${DRONE_BRANCH}-openssl
-    build_args_from_env:
-    - SSLTYPE
+    build_args:
+    - SSLTYPE=openssl
 - name: docker
   image: plugins/docker
-  environment:
-    SSLTYPE=gnutls
   settings:
     registry: atdr-writer.meo.ws
     username:
@@ -36,5 +32,5 @@ steps:
     auto_tag: false
     tags:
     - ${DRONE_BRANCH}-gnutls
-    build_args_from_env:
-    - SSLTYPE
+    build_args:
+    - SSLTYPE=gnutls
