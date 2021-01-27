@@ -2,7 +2,7 @@
 kind: pipeline
 name: default
 steps:
-- name: docker
+- name: docker_openssl
   image: plugins/docker
   build_args:
   - SSLTYPE=openssl
@@ -18,7 +18,7 @@ steps:
     auto_tag: false
     tags:
     - ${DRONE_BRANCH}-openssl
-- name: docker
+- name: docker_gnutls
   image: plugins/docker
   build_args:
   - SSLTYPE=openssl
