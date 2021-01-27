@@ -33,4 +33,4 @@ steps:
     tags:
     - ${DRONE_BRANCH}-gnutls
     build_args:
-    - TLSTYPE=openssl
+    - TLSTYPE=gnutls
