@@ -1,0 +1,40 @@
+---
+kind: pipeline
+name: default
+steps:
+- name: docker
+  image: plugins/docker
+  environment:
+    SSLTYPE=openssl
+  settings:
+    registry: atdr-writer.meo.ws
+    username:
+      from_secret: atdr_user
+    password:
+      from_secret: atdr_pass
+    repo: atdr-writer.meo.ws/archiveteam/wget-lua
+    dockerfile: Dockerfile
+    purge: true
+    auto_tag: false
+    tags:
+    - ${DRONE_BRANCH}-openssl
+    build_args_from_env:
+    - SSLTYPE
+- name: docker
+  image: plugins/docker
+  environment:
+    SSLTYPE=gnutls
+  settings:
+    registry: atdr-writer.meo.ws
+    username:
+      from_secret: atdr_user
+    password:
+      from_secret: atdr_pass
+    repo: atdr-writer.meo.ws/archiveteam/wget-lua
+    dockerfile: Dockerfile
+    purge: true
+    auto_tag: false
+    tags:
+    - ${DRONE_BRANCH}-gnutls
+    build_args_from_env:
+    - SSLTYPE
