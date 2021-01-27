@@ -17,7 +17,7 @@ steps:
     tags:
     - ${DRONE_BRANCH}-openssl
     build_args:
-    - SSLTYPE=openssl
+    - TLSTYPE=openssl
 - name: docker_gnutls
   image: plugins/docker
   settings:
@@ -33,4 +33,4 @@ steps:
     tags:
     - ${DRONE_BRANCH}-gnutls
     build_args:
-    - SSLTYPE=openssl
+    - TLSTYPE=openssl
