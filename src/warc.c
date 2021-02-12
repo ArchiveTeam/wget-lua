@@ -232,7 +232,7 @@ warc_write_buffer (const char *buffer, size_t size)
               logprintf (LOG_NOTQUIET,
                          _("Error compressing data.\n"));
               warc_write_ok = false;
-              return remaining;
+              return 0;
             }
 
           size_t written = fwrite(warc_current_zst_buffer_out, 1, output.pos,
@@ -242,7 +242,7 @@ warc_write_buffer (const char *buffer, size_t size)
               logprintf (LOG_NOTQUIET,
                          _("Error writing to WARC ZST file.\n"));
               warc_write_ok = false;
-              return written;
+              return 0;
             }
           finished = warc_current_zst_full_record ? (remaining == 0) : (input.pos == input.size);
         } while (! finished);
@@ -251,13 +251,19 @@ warc_write_buffer (const char *buffer, size_t size)
           logprintf (LOG_NOTQUIET,
                      _("Error reading all compressed data from buffer.\n"));
           warc_write_ok = false;
-          return false;
+          return 0;
         }
       return size;
     }
   else
 #endif
-    return fwrite (buffer, 1, size, warc_current_file);
+    if (fwrite (buffer, 1, size, warc_current_file) != size)
+      {
+        warc_write_ok = false;
+        return 0;
+      }
+    else
+      return size;
 }
 
 /* Writes STR to the current WARC file.
@@ -304,8 +310,18 @@ warc_write_start_record (void)
       warc_write_ok = false;
       return false;
     }
-  if (opt.warc_maxsize > 0 && ftello (warc_current_file) >= opt.warc_maxsize)
-    warc_start_new_file (false);
+
+  if (opt.warc_maxsize > 0)
+    {
+      warc_current_compressed_file_offset = ftello (warc_current_file);
+      if (warc_current_compressed_file_offset < 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
+      if (warc_current_compressed_file_offset >= opt.warc_maxsize)
+        warc_start_new_file (false);
+    }
 
 #if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
   /* Start a GZIP or ZSTD stream, if required. */
@@ -568,6 +584,12 @@ warc_write_end_record (void)
           /* Done, move back to the end of the file. */
           || fflush (warc_current_file) != 0
           || fseeko (warc_current_file, 0, SEEK_END) != 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
+
+      if (ferror (warc_current_file))
         {
           warc_write_ok = false;
           return false;
@@ -974,7 +996,10 @@ warc_write_warcinfo_record (const char *filename)
 "conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n") < 0
       || fprintf (warc_tmp, "robots: %s\r\n", (opt.use_robots ? "classic" : "off"))  < 0
       || fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring)  < 0)
-    warc_write_ok = false;
+    {
+      warc_write_ok = false;
+      return false;
+    }
 
   /* Add the user headers, if any. */
   if (opt.warc_user_headers)
@@ -982,12 +1007,18 @@ warc_write_warcinfo_record (const char *filename)
       int i;
       for (i = 0; opt.warc_user_headers[i]; i++)
         if (fprintf (warc_tmp, "%s\r\n", opt.warc_user_headers[i]) < 0)
-          warc_write_ok = false;
+          {
+            warc_write_ok = false;
+            return false;
+          }
     }
 
   if (fprintf (warc_tmp, "\r\n") < 0
       || fflush (warc_tmp) != 0)
-    warc_write_ok = false;
+    {
+      warc_write_ok = false;
+      return false;
+    }
 
   warc_write_digest_headers (warc_tmp, -1);
   warc_write_block_from_file (warc_tmp);
@@ -1215,17 +1246,23 @@ warc_start_new_file (bool meta)
         {
           warc_current_zst_dict_file = fopen(opt.warc_zstd_dict, "rb");
 
-          if (warc_current_zst_dict_file == NULL)
+          if (warc_current_zst_dict_file == NULL
+              || fseek(warc_current_zst_dict_file, 0L, SEEK_END) != 0)
             {
               warc_write_ok = false;
               return false;
             }
 
           /* Read ZSTD dictionary. */
-          fseek(warc_current_zst_dict_file, 0L, SEEK_END);
           size_t dict_size = ftell(warc_current_zst_dict_file);
+          if (dict_size < 0
+              || fseek(warc_current_zst_dict_file, 0L, SEEK_SET) != 0)
+            {
+              warc_write_ok = false;
+              return false;
+            }
+
           warc_current_zst_dict_buffer = xmalloc(dict_size);
-          fseek(warc_current_zst_dict_file, 0L, SEEK_SET);
 
           if (fread(warc_current_zst_dict_buffer, 1, dict_size,
                     warc_current_zst_dict_file) != dict_size)
@@ -1520,7 +1557,10 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
     }
 
   xfree (lineptr);
-  fclose (f);
+  if (fclose (f) != 0)
+    {
+      return false;
+    }
 
   return true;
 }
@@ -1678,25 +1718,30 @@ warc_write_metadata (void)
 void
 warc_close (void)
 {
+  int result = 0;
+
   if (warc_current_file != NULL)
     {
       warc_write_metadata ();
       *warc_current_warcinfo_uuid_str = 0;
-      fclose (warc_current_file);
+      result = fclose (warc_current_file);
       warc_current_file = NULL;
     }
 
-  if (warc_current_cdx_file != NULL)
+  if (warc_current_cdx_file != NULL && result == 0)
     {
-      fclose (warc_current_cdx_file);
+      result = fclose (warc_current_cdx_file);
       warc_current_cdx_file = NULL;
     }
 
-  if (warc_log_fp != NULL)
+  if (warc_log_fp != NULL && result == 0)
     {
-      fclose (warc_log_fp);
+      result = fclose (warc_log_fp);
       log_set_warc_log_fp (NULL);
     }
+
+  if (result != 0)
+    warc_write_ok = false;
 
 #ifdef HAVE_ZSTD
   if (opt.warc_compression_use_zstd)
@@ -1952,8 +1997,18 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                  bytes is set for the payload to deduplicate. */
               if (opt.warc_dedup_min_size > 0)
                 {
-                  fseeko (body, 0L, SEEK_END);
-                  write_revisit = ((ftello (body) - payload_offset) >= opt.warc_dedup_min_size);
+                  if (fseeko (body, 0L, SEEK_END) != 0)
+                    {
+                      warc_write_ok = false;
+                      return false;
+                    }
+                  offset = ftello (body);
+                  if (offset < 0)
+                    {
+                      warc_write_ok = false;
+                      return false;
+                    }
+                  write_revisit = ((offset - payload_offset) >= opt.warc_dedup_min_size);
                   if (fseeko (body, 0L, SEEK_SET) != 0)
                     {
                       warc_write_ok = false;
