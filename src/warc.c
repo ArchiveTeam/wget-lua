@@ -299,7 +299,11 @@ warc_write_start_record (void)
   if (!warc_write_ok)
     return false;
 
-  fflush (warc_current_file);
+  if (fflush (warc_current_file) != 0)
+    {
+      warc_write_ok = false;
+      return false;
+    }
   if (opt.warc_maxsize > 0 && ftello (warc_current_file) >= opt.warc_maxsize)
     warc_start_new_file (false);
 
@@ -308,6 +312,11 @@ warc_write_start_record (void)
   if (opt.warc_compression_enabled)
     {
       warc_current_compressed_file_offset = ftello (warc_current_file);
+      if (warc_current_compressed_file_offset < 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
       warc_current_compressed_file_uncompressed_size = 0;
 #ifdef HAVE_ZSTD
       if (opt.warc_compression_use_zstd)
@@ -327,8 +336,12 @@ warc_write_start_record (void)
              In warc_write_end_record we will fill this space
              with information about the uncompressed and
              compressed size of the record. */
-          fseek (warc_current_file, EXTRA_GZIP_HEADER_SIZE, SEEK_CUR);
-          fflush (warc_current_file);
+          if (fseek (warc_current_file, EXTRA_GZIP_HEADER_SIZE, SEEK_CUR) != 0
+              || fflush (warc_current_file) != 0)
+            {
+              warc_write_ok = false;
+              return false;
+            }
 
           /* Start a new GZIP or ZSTD stream. */
           dup_fd = dup (fileno (warc_current_file));
@@ -383,6 +396,7 @@ static bool
 warc_write_block_from_file (FILE *data_in)
 {
   /* Add the Content-Length header. */
+  int content_length_i;
   char content_length[MAX_INT_TO_STRING_LEN(off_t)];
   size_t buffer_size;
 #ifdef HAVE_ZSTD
@@ -394,8 +408,14 @@ warc_write_block_from_file (FILE *data_in)
   char buffer[buffer_size];
   size_t s;
 
-  fseeko (data_in, 0L, SEEK_END);
-  number_to_string (content_length, ftello (data_in));
+  if (fseeko (data_in, 0L, SEEK_END) != 0)
+    warc_write_ok = false;
+
+  content_length_i = ftello (data_in);
+  if (content_length_i < 0)
+    warc_write_ok = false;
+
+  number_to_string (content_length, content_length_i);
   warc_write_header ("Content-Length", content_length);
 
   /* End of the WARC header section. */
@@ -427,7 +447,8 @@ warc_write_end_record (void)
   if (opt.warc_compression_use_zstd)
     warc_current_zst_full_record = true;
 #endif
-  warc_write_buffer ("\r\n\r\n", 4);
+  if (warc_write_buffer ("\r\n\r\n", 4) != 4)
+    warc_write_ok = false;
 
 #ifdef HAVE_LIBZ
   /* We start a new gzip stream for each record.  */
@@ -436,7 +457,6 @@ warc_write_end_record (void)
       char extra_header[EXTRA_GZIP_HEADER_SIZE];
       char static_header[GZIP_STATIC_HEADER_SIZE];
       off_t current_offset, uncompressed_size, compressed_size;
-      size_t result;
 
       if (gzclose (warc_current_gzfile) != Z_OK)
         {
@@ -444,8 +464,12 @@ warc_write_end_record (void)
           return false;
         }
 
-      fflush (warc_current_file);
-      fseeko (warc_current_file, 0, SEEK_END);
+      if (fflush (warc_current_file) != 0
+          || fseeko (warc_current_file, 0, SEEK_END) != 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
 
       /* The WARC standard suggests that we add 'skip length' data in the
          extra header field of the GZIP stream.
@@ -464,17 +488,26 @@ warc_write_end_record (void)
 
       /* Calculate the uncompressed and compressed sizes. */
       current_offset = ftello (warc_current_file);
+      if (current_offset < 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
+
       uncompressed_size = current_offset - warc_current_compressed_file_offset;
       compressed_size = warc_current_compressed_file_uncompressed_size;
 
       /* Go back to the static GZIP header. */
-      fseeko (warc_current_file, warc_current_compressed_file_offset
-              + EXTRA_GZIP_HEADER_SIZE, SEEK_SET);
+      if (fseeko (warc_current_file, warc_current_compressed_file_offset
+              + EXTRA_GZIP_HEADER_SIZE, SEEK_SET) != 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
 
       /* Read the header. */
-      result = fread (static_header, 1, GZIP_STATIC_HEADER_SIZE,
-                             warc_current_file);
-      if (result != GZIP_STATIC_HEADER_SIZE)
+      if (fread (static_header, 1, GZIP_STATIC_HEADER_SIZE,
+                 warc_current_file) != GZIP_STATIC_HEADER_SIZE)
         {
           warc_write_ok = false;
           return false;
@@ -485,8 +518,14 @@ warc_write_end_record (void)
 
       /* Write the header back to the file, but starting at
          warc_current_compressed_file_offset. */
-      fseeko (warc_current_file, warc_current_compressed_file_offset, SEEK_SET);
-      fwrite (static_header, 1, GZIP_STATIC_HEADER_SIZE, warc_current_file);
+      if (fseeko (warc_current_file, warc_current_compressed_file_offset,
+                  SEEK_SET) != 0
+          || fwrite (static_header, 1, GZIP_STATIC_HEADER_SIZE,
+                     warc_current_file) != GZIP_STATIC_HEADER_SIZE)
+        {
+          warc_write_ok = false;
+          return false;
+        }
 
       /* Prepare the extra GZIP header. */
       /* XLEN, the length of the extra header fields.  */
@@ -510,13 +549,18 @@ warc_write_end_record (void)
       extra_header[13] = (compressed_size >> 24) & 255;
 
       /* Write the extra header after the static header. */
-      fseeko (warc_current_file, warc_current_compressed_file_offset
-              + GZIP_STATIC_HEADER_SIZE, SEEK_SET);
-      fwrite (extra_header, 1, EXTRA_GZIP_HEADER_SIZE, warc_current_file);
+      if (fseeko (warc_current_file, warc_current_compressed_file_offset
+                  + GZIP_STATIC_HEADER_SIZE, SEEK_SET) != 0
+          || fwrite (extra_header, 1, EXTRA_GZIP_HEADER_SIZE,
+                     warc_current_file) != EXTRA_GZIP_HEADER_SIZE
+          /* Done, move back to the end of the file. */
+          || fflush (warc_current_file) != 0
+          || fseeko (warc_current_file, 0, SEEK_END) != 0)
+        {
+          warc_write_ok = false;
+          return false;
+        }
 
-      /* Done, move back to the end of the file. */
-      fflush (warc_current_file);
-      fseeko (warc_current_file, 0, SEEK_END);
     }
 #endif
 
@@ -533,7 +577,7 @@ warc_write_date_header (const char *timestamp)
   char *current_timestamp;
 
   if (timestamp)
-      current_timestamp = xstrdup (timestamp);
+    current_timestamp = xstrdup (timestamp);
   else
     {
       current_timestamp = xmalloc (21);
@@ -740,7 +784,8 @@ warc_timestamp (char *timestamp, size_t timestamp_size)
   time_t rawtime = time (NULL);
   struct tm * timeinfo = gmtime (&rawtime);
 
-  if (strftime (timestamp, timestamp_size, "%Y-%m-%dT%H:%M:%SZ", timeinfo) == 0 && timestamp_size > 0)
+  if (strftime (timestamp, timestamp_size, "%Y-%m-%dT%H:%M:%SZ", timeinfo) == 0
+      && timestamp_size > 0)
     *timestamp = 0;
 
   return timestamp;
@@ -759,7 +804,8 @@ warc_uuid_str (char *urn_str)
   uuid_generate (record_id);
   uuid_unparse (record_id, uuid_str);
 
-  sprintf (urn_str, "<urn:uuid:%s>", uuid_str);
+  if (sprintf (urn_str, "<urn:uuid:%s>", uuid_str) < 0)
+    warc_write_ok = false;
 }
 #elif HAVE_UUID_CREATE
 void
@@ -771,7 +817,8 @@ warc_uuid_str (char *urn_str)
   uuid_create (&record_id, NULL);
   uuid_to_string (&record_id, &uuid_str, NULL);
 
-  sprintf (urn_str, "<urn:uuid:%s>", uuid_str);
+  if (sprintf (urn_str, "<urn:uuid:%s>", uuid_str) < 0)
+    warc_write_ok = false;
   xfree (uuid_str);
 }
 #else
@@ -796,20 +843,20 @@ windows_uuid_str (char *urn_str)
       HMODULE hm_rpcrt4 = LoadLibrary ("Rpcrt4.dll");
 
       if (hm_rpcrt4)
-	{
-	  pfn_UuidCreate =
-	    (UuidCreate_proc) GetProcAddress (hm_rpcrt4, "UuidCreate");
-	  pfn_UuidToString =
-	    (UuidToString_proc) GetProcAddress (hm_rpcrt4, "UuidToStringA");
-	  pfn_RpcStringFree =
-	    (RpcStringFree_proc) GetProcAddress (hm_rpcrt4, "RpcStringFreeA");
-	  if (pfn_UuidCreate && pfn_UuidToString && pfn_RpcStringFree)
-	    rpc_uuid_avail = 1;
-	  else
-	    rpc_uuid_avail = 0;
-	}
+      {
+        pfn_UuidCreate =
+          (UuidCreate_proc) GetProcAddress (hm_rpcrt4, "UuidCreate");
+        pfn_UuidToString =
+          (UuidToString_proc) GetProcAddress (hm_rpcrt4, "UuidToStringA");
+        pfn_RpcStringFree =
+          (RpcStringFree_proc) GetProcAddress (hm_rpcrt4, "RpcStringFreeA");
+        if (pfn_UuidCreate && pfn_UuidToString && pfn_RpcStringFree)
+          rpc_uuid_avail = 1;
+        else
+          rpc_uuid_avail = 0;
+      }
       else
-	rpc_uuid_avail = 0;
+      rpc_uuid_avail = 0;
     }
 
   if (rpc_uuid_avail)
@@ -818,14 +865,15 @@ windows_uuid_str (char *urn_str)
       UUID  uuid;
 
       if (pfn_UuidCreate (&uuid) == RPC_S_OK)
-	{
-	  if (pfn_UuidToString (&uuid, &uuid_str) == RPC_S_OK)
-	    {
-	      sprintf (urn_str, "<urn:uuid:%s>", uuid_str);
-	      pfn_RpcStringFree (&uuid_str);
-	      return 1;
-	    }
-	}
+      {
+        if (pfn_UuidToString (&uuid, &uuid_str) == RPC_S_OK)
+          {
+            if (sprintf (urn_str, "<urn:uuid:%s>", uuid_str) < 0)
+              warc_write_ok = false;
+            pfn_RpcStringFree (&uuid_str);
+            return 1;
+          }
+      }
     }
   return 0;
 }
@@ -857,19 +905,20 @@ warc_uuid_str (char *urn_str)
     uuid_data[i] = random_number (255);
 
   /* Set the four most significant bits (bits 12 through 15) of the
-	*  time_hi_and_version field to the 4-bit version number */
+     time_hi_and_version field to the 4-bit version number */
   uuid_data[6] = (uuid_data[6] & 0x0F) | 0x40;
 
   /* Set the two most significant bits (bits 6 and 7) of the
-	*  clock_seq_hi_and_reserved to zero and one, respectively. */
+     clock_seq_hi_and_reserved to zero and one, respectively. */
   uuid_data[8] = (uuid_data[8] & 0xBF) | 0x80;
 
-  sprintf (urn_str,
-    "<urn:uuid:%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x>",
-    uuid_data[0], uuid_data[1], uuid_data[2], uuid_data[3], uuid_data[4],
-    uuid_data[5], uuid_data[6], uuid_data[7], uuid_data[8], uuid_data[9],
-    uuid_data[10], uuid_data[11], uuid_data[12], uuid_data[13], uuid_data[14],
-    uuid_data[15]);
+  if (sprintf (urn_str,
+      "<urn:uuid:%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x>",
+      uuid_data[0], uuid_data[1], uuid_data[2], uuid_data[3], uuid_data[4],
+      uuid_data[5], uuid_data[6], uuid_data[7], uuid_data[8], uuid_data[9],
+      uuid_data[10], uuid_data[11], uuid_data[12], uuid_data[13], uuid_data[14],
+      uuid_data[15]) < 0)
+    warc_write_ok = false;
 }
 #endif
 
@@ -907,29 +956,37 @@ warc_write_warcinfo_record (const char *filename)
       return false;
     }
 
-  fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE);
-  fprintf (warc_tmp, "format: WARC File Format 1.1\r\n");
-  fprintf (warc_tmp,
-"conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n");
-  fprintf (warc_tmp, "robots: %s\r\n", (opt.use_robots ? "classic" : "off"));
-  fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring);
+  if (fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE) < 0
+      || fprintf (warc_tmp, "format: WARC File Format 1.1\r\n") < 0
+      || fprintf (warc_tmp,
+"conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n") < 0
+      || fprintf (warc_tmp, "robots: %s\r\n", (opt.use_robots ? "classic" : "off"))  < 0
+      || fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring)  < 0)
+    warc_write_ok = false;
+
   /* Add the user headers, if any. */
   if (opt.warc_user_headers)
     {
       int i;
       for (i = 0; opt.warc_user_headers[i]; i++)
-        fprintf (warc_tmp, "%s\r\n", opt.warc_user_headers[i]);
+        if (fprintf (warc_tmp, "%s\r\n", opt.warc_user_headers[i]) < 0)
+          warc_write_ok = false;
     }
-  fprintf(warc_tmp, "\r\n");
+
+  if (fprintf (warc_tmp, "\r\n") < 0
+      || fflush (warc_tmp) != 0)
+    warc_write_ok = false;
 
   warc_write_digest_headers (warc_tmp, -1);
   warc_write_block_from_file (warc_tmp);
   warc_write_end_record ();
 
+  if (ferror (warc_tmp) || fclose (warc_tmp) != 0)
+    warc_write_ok = false;
+
   if (! warc_write_ok)
     logprintf (LOG_NOTQUIET, _("Error writing warcinfo record to WARC file.\n"));
 
-  fclose (warc_tmp);
   return warc_write_ok;
 }
 
@@ -1064,12 +1121,13 @@ warc_start_new_file (bool meta)
 
   int base_filename_length;
   char *new_filename;
+  int print_returned;
 
   if (opt.warc_filename == NULL)
     return false;
 
-  if (warc_current_file != NULL)
-    fclose (warc_current_file);
+  if (warc_current_file != NULL && fclose (warc_current_file) != 0)
+    return false;
 
   *warc_current_warcinfo_uuid_str = 0;
   xfree (warc_current_filename);
@@ -1088,19 +1146,29 @@ warc_start_new_file (bool meta)
 
   /* If max size is enabled, we add a serial number to the file names. */
   if (meta)
-    sprintf (new_filename, "%s-meta.%s", opt.warc_filename, extension);
+    print_returned = sprintf (new_filename, "%s-meta.%s", opt.warc_filename, extension);
   else if (opt.warc_maxsize > 0)
     {
-      sprintf (new_filename, "%s-%05d.%s", opt.warc_filename,
+      print_returned = sprintf (new_filename, "%s-%05d.%s", opt.warc_filename,
                warc_current_file_number, extension);
     }
   else
-    sprintf (new_filename, "%s.%s", opt.warc_filename, extension);
+    print_returned = sprintf (new_filename, "%s.%s", opt.warc_filename, extension);
+
+  if (print_returned < 0)
+    return false;
 
   logprintf (LOG_VERBOSE, _("Opening WARC file %s.\n\n"), quote (new_filename));
 
   /* Open the WARC file. */
   warc_current_file = fopen (new_filename, "wb+");
+  if (warc_current_file == NULL)
+    {
+      logprintf (LOG_NOTQUIET, _("Error opening WARC file %s.\n"),
+                 quote (new_filename));
+      warc_write_ok = false;
+      return false;
+    }
 
 #ifdef HAVE_ZSTD
   if (opt.warc_compression_use_zstd)
@@ -1135,6 +1203,12 @@ warc_start_new_file (bool meta)
         {
           warc_current_zst_dict_file = fopen(opt.warc_zstd_dict, "rb");
 
+          if (warc_current_zst_dict_file == NULL)
+            {
+              warc_write_ok = false;
+              return false;
+            }
+
           /* Read ZSTD dictionary. */
           fseek(warc_current_zst_dict_file, 0L, SEEK_END);
           size_t dict_size = ftell(warc_current_zst_dict_file);
@@ -1145,6 +1219,7 @@ warc_start_new_file (bool meta)
                     warc_current_zst_dict_file) != dict_size)
             {
               logprintf (LOG_NOTQUIET, _("Error reading ZSTD dictionary.\n"));
+              warc_write_ok = false;
               return false;
             }
 
@@ -1155,12 +1230,16 @@ warc_start_new_file (bool meta)
             {
               logprintf (LOG_NOTQUIET,
                          _("Error loading ZSTD dictionary.\n"));
+              warc_write_ok = false;
               return false;
             }
 
           if (! opt.warc_zstd_dict_no_include &&
               ! warc_write_zstd_dictionary (warc_current_zst_dict_buffer, dict_size))
-            return false;
+            {
+              warc_write_ok = false;
+              return false;
+            }
 
           /* Reference the ZSTD dictionary with the context. */
           if (ZSTD_isError (ZSTD_CCtx_refCDict (warc_current_zst_context,
@@ -1172,26 +1251,28 @@ warc_start_new_file (bool meta)
               return false;
             }
 
-          fclose(warc_current_zst_dict_file);
+          if (fclose(warc_current_zst_dict_file) != 0)
+            {
+              warc_write_ok = false;
+              return false;
+            }
           xfree(warc_current_zst_dict_buffer);
         }
     }
 #endif
-  if (warc_current_file == NULL)
+
+  if (! warc_write_warcinfo_record (new_filename))
     {
-      logprintf (LOG_NOTQUIET, _("Error opening WARC file %s.\n"),
-                 quote (new_filename));
+      warc_write_ok = false;
       return false;
     }
 
-  if (! warc_write_warcinfo_record (new_filename))
-    return false;
-
   /* Add warcinfo uuid to manifest. */
-  if (warc_manifest_fp)
-    fprintf (warc_manifest_fp, "%s\n", warc_current_warcinfo_uuid_str);
+  if (warc_manifest_fp
+      && fprintf (warc_manifest_fp, "%s\n", warc_current_warcinfo_uuid_str) < 0)
+    warc_write_ok = false;
 
-  return true;
+  return warc_write_ok;
 }
 
 /* Opens the CDX file for output. */
@@ -1219,8 +1300,9 @@ warc_start_cdx_file (void)
    * g - file name
    * u - record-id
    */
-  fprintf (warc_current_cdx_file, " CDX a b a m s k r M V g u\n");
-  fflush (warc_current_cdx_file);
+  if (fprintf (warc_current_cdx_file, " CDX a b a m s k r M V g u\n") < 0
+      || fflush (warc_current_cdx_file) != 0)
+    return false;
 
   return true;
 }
@@ -1318,7 +1400,7 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
         val = NULL;
 
       if (val != NULL)
-        *val = strdup (token);
+        *val = xstrdup (token);
 
       token = strtok_r (NULL, CDX_FIELDSEP, &save_ptr);
       field_num++;
@@ -1536,7 +1618,11 @@ warc_write_metadata (void)
 
   warc_uuid_str (manifest_uuid);
 
-  fflush (warc_manifest_fp);
+  if (fflush (warc_manifest_fp) != 0)
+    {
+      warc_write_ok = false;
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
   warc_write_metadata_record (manifest_uuid,
                               "metadata://gnu.org/software/wget/warc/MANIFEST.txt",
                               NULL, NULL, NULL, "text/plain",
@@ -1544,13 +1630,18 @@ warc_write_metadata (void)
   /* warc_write_resource_record has closed warc_manifest_fp. */
 
   warc_tmp_fp = warc_tempfile ();
-  if (warc_tmp_fp == NULL)
+  if (warc_tmp_fp == NULL || fflush (warc_tmp_fp) != 0)
     {
+      warc_write_ok = false;
       logprintf (LOG_NOTQUIET, _("Could not open temporary WARC file.\n"));
       exit (WGET_EXIT_GENERIC_ERROR);
     }
-  fflush (warc_tmp_fp);
-  fprintf (warc_tmp_fp, "%s\n", program_argstring);
+
+  if (fprintf (warc_tmp_fp, "%s\n", program_argstring) < 0)
+    {
+      warc_write_ok = false;
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
 
   warc_write_resource_record (NULL,
                    "metadata://gnu.org/software/wget/warc/wget_arguments.txt",
@@ -1679,7 +1770,8 @@ warc_write_request_record (const char *url, const char *timestamp_str,
   warc_write_block_from_file (body);
   warc_write_end_record ();
 
-  fclose (body);
+  if (fclose (body) != 0)
+    warc_write_ok = false;
 
   return warc_write_ok;
 }
@@ -1726,19 +1818,21 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
   if (mime_type == NULL || strlen(mime_type) == 0)
     mime_type = "-";
   if (redirect_location == NULL || strlen(redirect_location) == 0)
-    tmp_location = strdup ("-");
+    tmp_location = xstrdup ("-");
   else
     tmp_location = url_escape(redirect_location);
 
   number_to_string (offset_string, offset);
 
   /* Print the CDX line. */
-  fprintf (warc_current_cdx_file, "%s %s %s %s %d %s %s - %s %s %s\n", url,
-           timestamp_str_cdx, url, mime_type, response_code, checksum,
-           tmp_location, offset_string, warc_current_filename,
-           response_uuid);
-  fflush (warc_current_cdx_file);
-  free (tmp_location);
+  if (fprintf (warc_current_cdx_file, "%s %s %s %s %d %s %s - %s %s %s\n", url,
+               timestamp_str_cdx, url, mime_type, response_code, checksum,
+               tmp_location, offset_string, warc_current_filename,
+               response_uuid) < 0
+      || fflush (warc_current_cdx_file) != 0);
+    warc_write_ok = false;
+
+  xfree (tmp_location);
 
   return true;
 }
@@ -1794,7 +1888,8 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_block_from_file (body);
   warc_write_end_record ();
 
-  fclose (body);
+  if (fclose (body) != 0)
+    warc_write_ok = false;
 
   return warc_write_ok;
 }
@@ -1867,10 +1962,10 @@ warc_write_response_record (const char *url, const char *timestamp_str,
               _("Found exact match in CDX file. Saving revisit record to WARC.\n"));
 
                   /* Remove the payload from the file. */
-                  if (payload_offset > 0)
+                  if (payload_offset > 0 && ftruncate (fileno (body), payload_offset) == -1)
                     {
-                      if (ftruncate (fileno (body), payload_offset) == -1)
-                        return false;
+                      warc_write_ok = false;
+                      return false;
                     }
 
                   /* Send the original payload digest. */
@@ -1891,8 +1986,18 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 
   warc_uuid_str (response_uuid);
 
-  fseeko (warc_current_file, 0L, SEEK_END);
+  if (fseeko (warc_current_file, 0L, SEEK_END) != 0)
+    {
+      warc_write_ok = false;
+      return false;
+    }
+
   offset = ftello (warc_current_file);
+  if (offset < 0)
+    {
+      warc_write_ok = false;
+      return false;
+    }
 
   warc_write_start_record ();
   warc_write_header ("WARC-Type", "response");
@@ -1914,7 +2019,9 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   if (!opt.warc_dedup_disable)
     store_warc_record (url, date, response_uuid, sha1_res_payload);
 
-  fclose (body);
+  if (fclose (body) != 0)
+    warc_write_ok = false;
+
   xfree (date);
 
   if (warc_write_ok && opt.warc_cdx_enabled)
@@ -1971,7 +2078,8 @@ warc_write_record (const char *record_type, const char *resource_uuid,
   warc_write_block_from_file (body);
   warc_write_end_record ();
 
-  fclose (body);
+  if (fclose (body) != 0)
+    warc_write_ok = false;
 
   return warc_write_ok;
 }
