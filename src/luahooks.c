@@ -108,6 +108,7 @@ handle_lua_error (int res)
       if (!opt.no_abort_on_lua_error)
         {
             fflush(stdout);
+            fflush(stderr);
             abort();
         }
     }
