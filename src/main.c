@@ -378,6 +378,9 @@ static struct cmdline_option option_data[] =
     { "mirror", 'm', OPT_BOOLEAN, "mirror", -1 },
     { "netrc", 0, OPT_BOOLEAN, "netrc", -1 },
     { "no", 'n', OPT__NO, NULL, required_argument },
+#ifdef ENABLE_LUA
+    { "no-abort-on-lua-error", 0, OPT_BOOLEAN, "noabortonluaerror", -1},
+#endif
     { "no-clobber", 0, OPT_BOOLEAN, "noclobber", -1 },
     { "no-config", 0, OPT_BOOLEAN, "noconfig", -1},
     { "no-parent", 0, OPT_BOOLEAN, "noparent", -1 },
@@ -775,6 +778,10 @@ Download:\n"),
 #ifdef ENABLE_XATTR
     N_("\
        --xattr                     turn on storage of metadata in extended file attributes\n"),
+#endif
+#ifdef ENABLE_LUA
+    N_("\
+       --no-abort-on-lua-error     continue after a Lua execution error, instead of aborting\n"),
 #endif
     "\n",
 
