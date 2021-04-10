@@ -264,6 +264,9 @@ static const struct {
   { "method",           &opt.method,            cmd_string_uppercase },
   { "mirror",           NULL,                   cmd_spec_mirror },
   { "netrc",            &opt.netrc,             cmd_boolean },
+#ifdef ENABLE_LUA
+  { "noabortonluaerror", &opt.no_abort_on_lua_error, cmd_boolean },
+#endif
   { "noclobber",        &opt.noclobber,         cmd_boolean },
   { "noconfig",         &opt.noconfig,          cmd_boolean },
   { "noparent",         &opt.no_parent,         cmd_boolean },

@@ -105,6 +105,12 @@ handle_lua_error (int res)
             printf ("Lua error: %s.\n", msg);
         }
       free (msg);
+      if (!opt.no_abort_on_lua_error)
+        {
+            fflush(stdout);
+            fflush(stderr);
+            abort();
+        }
     }
 }
 

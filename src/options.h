@@ -343,6 +343,7 @@ struct options
 
 #ifdef ENABLE_LUA
   char *lua_filename;		        /* Lua script filename */
+  bool no_abort_on_lua_error;       /* Whether to ignore Lua script errors. */
 #endif
 
   bool report_bps;              /*Output bandwidth in bits format*/
