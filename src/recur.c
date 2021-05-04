@@ -353,14 +353,9 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
             }
           else
             {
-
-              if (body_data || headers)
-                {
-                  SUSPEND_METHOD;
-                }
-
               if (body_data)
                 {
+                  SUSPEND_METHOD;
                   opt.body_data = body_data;
                   opt.body_file = NULL;
                   opt.method = method;
@@ -368,7 +363,17 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
 
               if (headers)
                 {
+                  saved_user_headers = opt.user_headers;
+                  opt.user_headers = NULL;
                   header_cur = headers;
+
+                  if (saved_user_headers)
+                    {
+                      int i;
+                      for (i = 0; saved_user_headers[i]; i++)
+                        opt.user_headers = vec_append (opt.user_headers,
+                                                       saved_user_headers[i]);
+                    }
 
                   do
                     {
@@ -391,8 +396,10 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                                      &dt, false, i, true);
 
               if (headers)
-                free_vec (opt.user_headers);
-                opt.user_headers = NULL;
+                {
+                  free_vec (opt.user_headers);
+                  opt.user_headers = saved_user_headers;
+                }
 
               opt.body_data = NULL;
               opt.body_file = NULL;
