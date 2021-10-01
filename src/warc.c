@@ -419,7 +419,7 @@ static bool
 warc_write_block_from_file (FILE *data_in)
 {
   /* Add the Content-Length header. */
-  int content_length_i;
+  off_t content_length_i;
   char content_length[MAX_INT_TO_STRING_LEN(off_t)];
   size_t buffer_size;
 #ifdef HAVE_ZSTD
