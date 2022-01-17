@@ -39,6 +39,7 @@ as that of the covered work.  */
 #include <time.h>
 #include <locale.h>
 #include <fcntl.h>
+#include <base32.h>
 
 #include "hash.h"
 #include "http.h"
@@ -61,6 +62,7 @@ as that of the covered work.  */
 #include "spider.h"
 #include "luahooks.h"
 #include "warc.h"
+#include <sha1.h>
 #include "c-strcase.h"
 #include "version.h"
 #ifdef HAVE_METALINK
@@ -1622,6 +1624,7 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   int warcerr = 0;
   int flags = 0;
   bool write_to_warc = true;
+  bool dedup_to_warc = false;
   char *url = u->url;
 
   if (opt.warc_filename != NULL)
@@ -1683,10 +1686,33 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
                           hs->restval, &hs->rd_size, &hs->len, &hs->dltime,
                           flags, warc_tmp);
 
+  char sha1_res_block[SHA1_DIGEST_SIZE];
+  char sha1_res_payload[SHA1_DIGEST_SIZE];
+
+  rewind (warc_tmp);
+  warc_sha1_stream_with_payload (warc_tmp, sha1_res_block, sha1_res_payload, warc_payload_offset);
+
+  char digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
+
+  warc_base32_sha1_digest (sha1_res_payload, digest, sizeof(digest));
+
   write_to_warc = luahooks_write_to_warc (u, hs);
+
+  dedup_to_warc = luahooks_dedup_to_warc (u, digest);
 
   if (hs->res >= 0)
     {
+      if (warc_tmp != NULL && dedup_to_warc)
+        {
+          // Make new rewrite record, but also don't write the original record!
+          write_to_warc = false;
+          ftruncate (fileno (warc_tmp), warc_payload_offset);
+          bool r = warc_write_arbitrary_revisit_record (url, warc_timestamp_str,
+                                                    warc_request_uuid, digest, url, warc_ip,
+                                                    warc_tmp);
+          if (! r)
+                  return WARC_ERR;
+        }
       if (warc_tmp != NULL && write_to_warc)
         {
           /* Create a response record and write it to the WARC file.
