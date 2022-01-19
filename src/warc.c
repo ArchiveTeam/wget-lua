@@ -1927,7 +1927,7 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", revisit_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  if (refers_to != "NULL")
+  if (refers_to != NULL)
     warc_write_header ("WARC-Refers-To", refers_to);
   if (refers_to_target_uri != NULL)
     warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
@@ -1995,14 +1995,14 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 
           if (rec_existing == NULL){
             warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-            const char *revisit_cdx_date = luahooks_dedup_to_warc (url, payload_digest); 
+            const char *revisit_cdx_date = luahooks_dedup_response (url, payload_digest); 
             
             if(revisit_cdx_date != NULL) {
               rec_existing = xmalloc (sizeof (struct warc_dedup_record));
 
               rec_existing->uri = url;
               rec_existing->date = revisit_cdx_date;
-              rec_existing->uuid = "NULL";
+              rec_existing->uuid = NULL;
               memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
             }  
           }
