@@ -36,7 +36,7 @@ const char *luahooks_lookup_host (const char *host);
 luahook_action_t luahooks_httploop_result (const struct url *url,
                     const uerr_t err, const struct http_stat *hstat);
 bool luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat);
-bool luahooks_dedup_to_warc (const struct url *url, char *digest);
+const char *luahooks_dedup_to_warc (const char *url, char *digest);
 bool luahooks_download_child (const struct urlpos *upos,
                     struct url *parent, int depth,
                     struct url *start_url_parsed, struct iri *iri,
