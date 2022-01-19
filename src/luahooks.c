@@ -554,9 +554,9 @@ luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
 }
 
 // We're looking for ISO-8601 times to be returned or false.
-const char *luahooks_dedup_to_warc (const char *url, char *digest)
+const char *luahooks_dedup_response (const char *url, char *digest)
 {
-  if (lua == NULL || !luahooks_function_lookup ("callbacks", "dedup_to_warc"))
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "dedup_response"))
     return NULL;
 
   lua_pushstring (lua, url);
