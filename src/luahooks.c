@@ -553,26 +553,29 @@ luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
     }
 }
 
-bool
-luahooks_dedup_to_warc (const struct url *url, char *digest)
+// We're looking for ISO-8601 times to be returned or false.
+const char *luahooks_dedup_to_warc (const char *url, char *digest)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "dedup_to_warc"))
-    return false;
+    return NULL;
 
-  url_to_lua_table (url);
+  lua_pushstring (lua, url);
   lua_pushstring (lua, digest);
 
   int res = lua_pcall (lua, 2, 1, 0);
   if (res != 0)
     {
       handle_lua_error (res);
-      return false;
+      return NULL;
     }
   else
     {
-      bool answer = lua_toboolean (lua, -1);
-      lua_pop (lua, 1);
-      return answer;
+      if (lua_isstring(lua, -1)) {
+        const char *answer = lua_tostring (lua, -1);
+        return answer;
+      } else {
+        return NULL;
+      }
     }
 }
 

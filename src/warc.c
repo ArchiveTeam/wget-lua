@@ -34,6 +34,7 @@ as that of the covered work.  */
 #include "version.h"
 #include "dirname.h"
 #include "url.h"
+#include "luahooks.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -647,7 +648,7 @@ warc_write_ip_header (const ip_address *ip)
    portion of the file starting at payload_offset and continuing to
    the end of the file.  The digest number will be written into the
    16 bytes beginning ad RES_PAYLOAD.  */
-int
+static int
 warc_sha1_stream_with_payload (FILE *stream, void *res_block, void *res_payload,
                                off_t payload_offset)
 {
@@ -762,7 +763,7 @@ warc_sha1_stream_with_payload (FILE *stream, void *res_block, void *res_payload,
 
 /* Converts the SHA1 digest to a base32-encoded string.
    "sha1:DIGEST\0"  (Allocates a new string for the response.)  */
-char *
+static char *
 warc_base32_sha1_digest (const char *sha1_digest, char *sha1_base32, size_t sha1_base32_size)
 {
   if (sha1_base32_size >= BASE32_LENGTH(SHA1_DIGEST_SIZE) + 5 + 1)
@@ -1926,68 +1927,12 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", revisit_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  warc_write_header ("WARC-Refers-To", refers_to);
+  if (refers_to != "NULL")
+    warc_write_header ("WARC-Refers-To", refers_to);
   if (refers_to_target_uri != NULL)
     warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
   if (refers_to_date != NULL)
     warc_write_header ("WARC-Refers-To-Date", refers_to_date);
-  warc_write_header ("WARC-Profile", "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest");
-  warc_write_header ("WARC-Truncated", "length");
-  warc_write_header ("WARC-Target-URI", url);
-  warc_write_date_header (timestamp_str);
-  warc_write_ip_header (ip);
-  if (opt.warc_item_name != NULL)
-    warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
-  warc_write_header ("Content-Type", "application/http;msgtype=response");
-  warc_write_header ("WARC-Block-Digest", block_digest);
-  warc_write_header ("WARC-Payload-Digest", payload_digest);
-  warc_write_block_from_file (body);
-  warc_write_end_record ();
-
-  if (fclose (body) != 0)
-    warc_write_ok = false;
-
-  return warc_write_ok;
-}
-
-/* Writes a arbitrary revisit record to the WARC file.
-   url  is the target uri of the request/response,
-   timestamp_str  is the timestamp of the request that generated this response
-                  (generated with warc_timestamp),
-   concurrent_to_uuid  is the uuid of the request for that generated this response
-                 (generated with warc_uuid_str),
-   payload_digest is the sha1 digest of the payload,
-   refers_to_target_uri is the target URI where the revisit record refers to.
-   ip  is the ip address of the server (or NULL),
-   body  is a pointer to a file containing the response headers (without payload).
-   
-   Calling this function will close body.
-   Returns true on success, false on error. 
-   
-   Currently using refers-to-target-uri + target-uri + payload digest but could be upgraded with refers-to-date? */
-bool
-warc_write_arbitrary_revisit_record (const char *url, const char *timestamp_str,
-                           const char *concurrent_to_uuid, const char *payload_digest,
-                           const char *refers_to_target_uri,
-                           const ip_address *ip, FILE *body)
-{
-  char revisit_uuid [48];
-  char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
-  char sha1_res_block[SHA1_DIGEST_SIZE];
-
-  warc_uuid_str (revisit_uuid);
-
-  rewind (body);
-  sha1_stream (body, sha1_res_block);
-  warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
-
-  warc_write_start_record ();
-  warc_write_header ("WARC-Type", "revisit");
-  warc_write_header ("WARC-Record-ID", revisit_uuid);
-  warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
-  warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
-  //warc_write_header ("WARC-Refers-To-Date", refers_to_date);
   warc_write_header ("WARC-Profile", "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest");
   warc_write_header ("WARC-Truncated", "length");
   warc_write_header ("WARC-Target-URI", url);
@@ -2048,6 +1993,20 @@ warc_write_response_record (const char *url, const char *timestamp_str,
           struct warc_dedup_record *rec_existing;
           rec_existing = warc_find_duplicate_cdx_record (url, sha1_res_payload);
 
+          if (rec_existing == NULL){
+            warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
+            const char *revisit_cdx_date = luahooks_dedup_to_warc (url, payload_digest); 
+            
+            if(revisit_cdx_date != NULL) {
+              rec_existing = xmalloc (sizeof (struct warc_dedup_record));
+
+              rec_existing->uri = url;
+              rec_existing->date = revisit_cdx_date;
+              rec_existing->uuid = "NULL";
+              memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
+            }  
+          }
+
           if (rec_existing != NULL)
             {
               /* Check the size of the payload in case a minimum number of
@@ -2082,7 +2041,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 
                   /* Found an existing record. */
                   logprintf (LOG_VERBOSE,
-              _("Found exact match in CDX file. Saving revisit record to WARC.\n"));
+              _("Found exact match in CDX file or a LUA hook. Saving revisit record to WARC.\n"));
 
                   /* Remove the payload from the file. */
                   if (payload_offset > 0 && ftruncate (fileno (body), payload_offset) == -1)
