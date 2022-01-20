@@ -1979,6 +1979,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   const char *date;
   off_t offset;
   bool write_revisit;
+  bool luahooks_revisit_malloc = false;
 
   if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
@@ -1995,15 +1996,17 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 
           if (rec_existing == NULL){
             warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-            const char *revisit_cdx_date = luahooks_dedup_response (url, payload_digest); 
-            
-            if(revisit_cdx_date != NULL) {
+            struct luahooks_revisit *revisit_cdx = luahooks_dedup_response (url, payload_digest);
+            if(revisit_cdx != NULL) {
               rec_existing = xmalloc (sizeof (struct warc_dedup_record));
 
-              rec_existing->uri = url;
-              rec_existing->date = revisit_cdx_date;
-              rec_existing->uuid = NULL;
+              rec_existing->uri = revisit_cdx->target_uri;
+              rec_existing->date = revisit_cdx->date;
+              rec_existing->uuid = revisit_cdx->response_uuid;
               memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
+
+              xfree(revisit_cdx);
+              luahooks_revisit_malloc = true;
             }  
           }
 
@@ -2055,7 +2058,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                   result = warc_write_revisit_record (url, timestamp_str,
                              concurrent_to_uuid, payload_digest, rec_existing->uuid,
                              rec_existing->uri, rec_existing->date, ip, body);
-
+                  if (luahooks_revisit_malloc == true) xfree(rec_existing);
                   return result;
                 }
             }
