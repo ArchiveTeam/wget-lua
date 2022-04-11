@@ -34,6 +34,7 @@ as that of the covered work.  */
 #include "version.h"
 #include "dirname.h"
 #include "url.h"
+#include "luahooks.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1915,7 +1916,8 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", revisit_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
-  warc_write_header ("WARC-Refers-To", refers_to);
+  if (refers_to != NULL)
+    warc_write_header ("WARC-Refers-To", refers_to);
   if (refers_to_target_uri != NULL)
     warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
   if (refers_to_date != NULL)
@@ -1966,6 +1968,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   const char *date;
   off_t offset;
   bool write_revisit;
+  bool luahooks_revisit_malloc = false;
 
   if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
@@ -1979,6 +1982,22 @@ warc_write_response_record (const char *url, const char *timestamp_str,
              data before. */
           struct warc_dedup_record *rec_existing;
           rec_existing = warc_find_duplicate_cdx_record (url, sha1_res_payload);
+
+          if (rec_existing == NULL){
+            warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
+            struct luahooks_revisit *revisit_cdx = luahooks_dedup_response (url, payload_digest);
+            if(revisit_cdx != NULL) {
+              rec_existing = xmalloc (sizeof (struct warc_dedup_record));
+
+              rec_existing->uri = revisit_cdx->target_uri;
+              rec_existing->date = revisit_cdx->date;
+              rec_existing->uuid = revisit_cdx->response_uuid;
+              memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
+
+              xfree(revisit_cdx);
+              luahooks_revisit_malloc = true;
+            }  
+          }
 
           if (rec_existing != NULL)
             {
@@ -2014,7 +2033,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 
                   /* Found an existing record. */
                   logprintf (LOG_VERBOSE,
-              _("Found exact match in CDX file. Saving revisit record to WARC.\n"));
+              _("Found exact match in CDX file or a LUA hook. Saving revisit record to WARC.\n"));
 
                   /* Remove the payload from the file. */
                   if (payload_offset > 0 && ftruncate (fileno (body), payload_offset) == -1)
@@ -2028,7 +2047,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                   result = warc_write_revisit_record (url, timestamp_str,
                              concurrent_to_uuid, payload_digest, rec_existing->uuid,
                              rec_existing->uri, rec_existing->date, ip, body);
-
+                  if (luahooks_revisit_malloc == true) xfree(rec_existing);
                   return result;
                 }
             }

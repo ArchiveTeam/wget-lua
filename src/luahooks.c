@@ -553,6 +553,54 @@ luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
     }
 }
 
+struct luahooks_revisit *luahooks_dedup_response (const char *url, char *digest)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "dedup_response"))
+    return NULL;
+
+  lua_pushstring (lua, url);
+  lua_pushstring (lua, digest);
+
+  int res = lua_pcall (lua, 2, 1, 0);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return NULL;
+    }
+  else
+    {
+      if (lua_istable(lua, -1)) 
+      {
+        
+        struct luahooks_revisit *answer = malloc (sizeof (struct luahooks_revisit));
+
+        // expects ISO-8601 timestamp
+        lua_getfield (lua, -1, "date");
+        answer->date = lua_tostring (lua, -1);
+        lua_pop (lua, 1);
+
+        lua_getfield (lua, -1, "response_uuid");
+        if (lua_type(lua, -1) != LUA_TNIL) {
+              //expects <urn:uuid:%s>
+              answer->response_uuid = lua_tostring (lua, -1);
+            } else {
+              answer->response_uuid = NULL;
+            }
+        lua_pop (lua, 1);
+
+        lua_getfield (lua, -1, "target_uri");
+        answer->target_uri = lua_tostring (lua, -1);
+        lua_pop (lua, 1);
+        return answer;
+      } 
+      else
+      {
+        return NULL;
+      }
+    }
+}
+
+
 bool
 luahooks_download_child (const struct urlpos *upos, struct url *parent, int depth,
                          struct url *start_url_parsed, struct iri *iri,
