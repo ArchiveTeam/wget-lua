@@ -52,7 +52,7 @@ bool luahooks_can_generate_urls ();
 struct luahooks_url *luahooks_get_urls (const char *file, const char *url,
                                        bool is_css, struct iri *iri);
 void luahooks_finish (double start_time, double end_time,
-                 int numurls, SUM_SIZE_INT total_downloaded_bytes,
+                 int numurls, wgint total_downloaded_bytes,
                  double total_download_time);
 int luahooks_before_exit (int exit_status);
 

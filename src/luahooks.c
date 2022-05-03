@@ -772,7 +772,7 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
 
 void
 luahooks_finish (double start_time, double end_time,
-                 int numurls, SUM_SIZE_INT total_downloaded_bytes,
+                 int numurls, wgint total_downloaded_bytes,
                  double total_download_time)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "finish"))
