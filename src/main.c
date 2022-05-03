@@ -669,6 +669,8 @@ Download:\n"),
     N_("\
        --retry-connrefused         retry even if connection is refused\n"),
     N_("\
+       --retry-on-host-error       consider host errors as non-fatal, transient errors\n"),
+    N_("\
        --retry-on-http-error=ERRORS    comma-separated list of HTTP errors to retry\n"),
     N_("\
   -O,  --output-document=FILE      write documents to FILE\n"),
@@ -1110,13 +1112,13 @@ secs_to_human_time (double interval)
   mins = secs / 60, secs %= 60;
 
   if (days)
-    sprintf (buf, "%dd %dh %dm %ds", days, hours, mins, secs);
+    snprintf (buf, sizeof(buf), "%dd %dh %dm %ds", days, hours, mins, secs);
   else if (hours)
-    sprintf (buf, "%dh %dm %ds", hours, mins, secs);
+    snprintf (buf, sizeof(buf), "%dh %dm %ds", hours, mins, secs);
   else if (mins)
-    sprintf (buf, "%dm %ds", mins, secs);
+    snprintf (buf, sizeof(buf), "%dm %ds", mins, secs);
   else
-    sprintf (buf, "%ss", print_decimal (interval));
+    snprintf (buf, sizeof(buf), "%ss", print_decimal (interval));
 
   return buf;
 }
@@ -1409,7 +1411,6 @@ main (int argc, char **argv)
   char *p;
   int i, ret, longindex;
   int nurls;
-  int retconf;
   int argstring_length;
   bool use_userconfig = false;
   bool noconfig = false;

@@ -1460,7 +1460,7 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       /* For some extra efficiency, we decode the base32 encoded
          checksum value.  This should produce exactly SHA1_DIGEST_SIZE
          bytes.  */
-      size_t checksum_l;
+      idx_t checksum_l;
       char * checksum_v;
       char *digest;
       base32_decode_alloc (checksum, strlen (checksum), &checksum_v,
