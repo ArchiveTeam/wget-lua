@@ -313,6 +313,7 @@ reject_reason_to_string (const reject_reason v)
       CONST_CASE (WG_RR_SPANNEDHOST)
       CONST_CASE (WG_RR_ROBOTS)
       CONST_CASE (WG_RR_LUAHOOK)
+      CONST_CASE (WG_RR_IGNORE)
     }
   return NULL;
 }
@@ -336,6 +337,7 @@ reject_reason_to_download_child_p_string (const reject_reason v)
       case WG_RR_SPANNEDHOST: return "DIFFERENT_HOST";
       case WG_RR_ROBOTS:      return "ROBOTS_TXT_FORBIDDEN";
       case WG_RR_LUAHOOK:     return "LUAHOOK";
+      case WG_RR_IGNORE:      return "IGNORED";
     }
   return NULL;
 }

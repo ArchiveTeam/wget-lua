@@ -55,7 +55,7 @@ typedef void (*tag_handler_t) (int, struct taginfo *, struct map_context *);
 DECLARE_TAG_HANDLER (tag_find_urls);
 DECLARE_TAG_HANDLER (tag_handle_base);
 DECLARE_TAG_HANDLER (tag_handle_form);
-DECLARE_TAG_HANDLER (tag_handle_img);
+DECLARE_TAG_HANDLER (tag_handle_for_srcset);
 DECLARE_TAG_HANDLER (tag_handle_link);
 DECLARE_TAG_HANDLER (tag_handle_meta);
 
@@ -84,7 +84,16 @@ enum {
   TAG_TH,
   TAG_VIDEO,
   TAG_AUDIO,
-  TAG_SOURCE
+  TAG_SOURCE,
+  TAG_DEL,
+  TAG_INS,
+  TAG_Q,
+  TAG_TRACK,
+  TAG_IMAGE,
+  TAG_DIV,
+  TAG_SPAN,
+  TAG_LI,
+  TAG_PARAM,
 };
 
 /* The list of known tags and functions used for handling them.  Most
@@ -105,7 +114,7 @@ static struct known_tag {
   { TAG_FORM,    "form",        tag_handle_form },
   { TAG_FRAME,   "frame",       tag_find_urls },
   { TAG_IFRAME,  "iframe",      tag_find_urls },
-  { TAG_IMG,     "img",         tag_handle_img },
+  { TAG_IMG,     "img",         tag_handle_for_srcset },
   { TAG_INPUT,   "input",       tag_find_urls },
   { TAG_LAYER,   "layer",       tag_find_urls },
   { TAG_LINK,    "link",        tag_handle_link },
@@ -118,7 +127,16 @@ static struct known_tag {
   { TAG_TH,      "th",          tag_find_urls },
   { TAG_VIDEO,   "video",       tag_find_urls },
   { TAG_AUDIO,   "audio",       tag_find_urls },
-  { TAG_SOURCE,  "source",      tag_find_urls }
+  { TAG_SOURCE,  "source",      tag_handle_for_srcset },
+  { TAG_DEL,     "del",         tag_find_urls },
+  { TAG_INS,     "ins",         tag_find_urls },
+  { TAG_Q,       "q",           tag_find_urls },
+  { TAG_TRACK,   "track",       tag_find_urls },
+  { TAG_IMAGE,   "image",       tag_find_urls },
+  { TAG_DIV,     "div",         tag_find_urls },
+  { TAG_SPAN,    "span",        tag_handle_for_srcset },
+  { TAG_LI,      "li",          tag_find_urls },
+  { TAG_PARAM,   "param",       tag_find_urls },
 };
 
 /* tag_url_attributes documents which attributes of which tags contain
@@ -138,6 +156,11 @@ static struct known_tag {
    image.  */
 #define ATTR_HTML       2
 
+/* The link is normally not followed through the browser. This can for
+   example be a link to a canonical version of the web page. These links
+   can be useful in certain cases of archiving. */
+#define ATTR_IGNORE     4
+
 /* For tags handled by tag_find_urls: attributes that contain URLs to
    download. */
 static struct {
@@ -145,32 +168,99 @@ static struct {
   const char *attr_name;
   int flags;
 } tag_url_attributes[] = {
-  { TAG_A,              "href",         ATTR_HTML },
-  { TAG_APPLET,         "code",         ATTR_INLINE },
-  { TAG_AREA,           "href",         ATTR_HTML },
-  { TAG_BGSOUND,        "src",          ATTR_INLINE },
-  { TAG_BODY,           "background",   ATTR_INLINE },
-  { TAG_EMBED,          "href",         ATTR_HTML },
-  { TAG_EMBED,          "src",          ATTR_INLINE | ATTR_HTML },
-  { TAG_FIG,            "src",          ATTR_INLINE },
-  { TAG_FRAME,          "src",          ATTR_INLINE | ATTR_HTML },
-  { TAG_IFRAME,         "src",          ATTR_INLINE | ATTR_HTML },
-  { TAG_IMG,            "href",         ATTR_INLINE },
-  { TAG_IMG,            "lowsrc",       ATTR_INLINE },
-  { TAG_IMG,            "src",          ATTR_INLINE },
-  { TAG_INPUT,          "src",          ATTR_INLINE },
-  { TAG_LAYER,          "src",          ATTR_INLINE | ATTR_HTML },
-  { TAG_OBJECT,         "data",         ATTR_INLINE },
-  { TAG_OVERLAY,        "src",          ATTR_INLINE | ATTR_HTML },
-  { TAG_SCRIPT,         "src",          ATTR_INLINE },
-  { TAG_TABLE,          "background",   ATTR_INLINE },
-  { TAG_TD,             "background",   ATTR_INLINE },
-  { TAG_TH,             "background",   ATTR_INLINE },
-  { TAG_VIDEO,          "src",          ATTR_INLINE },
-  { TAG_VIDEO,          "poster",       ATTR_INLINE },
-  { TAG_AUDIO,          "src",          ATTR_INLINE },
-  { TAG_AUDIO,          "poster",       ATTR_INLINE },
-  { TAG_SOURCE,         "src",          ATTR_INLINE }
+  { TAG_A,              "href",           ATTR_HTML },
+  { TAG_A,              "data-url",       ATTR_HTML },
+  { TAG_A,              "data-bg-image",  ATTR_HTML },
+  { TAG_APPLET,         "code",           ATTR_INLINE },
+  { TAG_APPLET,         "src",            ATTR_INLINE },
+  { TAG_APPLET,         "codebase",       ATTR_INLINE },
+  { TAG_APPLET,         "archive",        ATTR_INLINE },
+  { TAG_AREA,           "href",           ATTR_HTML },
+  { TAG_BGSOUND,        "src",            ATTR_INLINE },
+  { TAG_BODY,           "background",     ATTR_INLINE },
+  { TAG_EMBED,          "archive",        ATTR_INLINE | ATTR_HTML },
+  { TAG_EMBED,          "href",           ATTR_HTML },
+  { TAG_EMBED,          "pluginspage",    ATTR_HTML | ATTR_IGNORE },
+  { TAG_EMBED,          "src",            ATTR_INLINE | ATTR_HTML },
+  { TAG_FIG,            "src",            ATTR_INLINE },
+  { TAG_FRAME,          "src",            ATTR_INLINE | ATTR_HTML },
+  { TAG_IFRAME,         "src",            ATTR_INLINE | ATTR_HTML },
+  { TAG_IMG,            "data-src",       ATTR_INLINE },
+  { TAG_IMG,            "href",           ATTR_INLINE },
+  { TAG_IMG,            "longdesc",       ATTR_HTML },
+  { TAG_IMG,            "lowsrc",         ATTR_INLINE },
+  { TAG_IMG,            "src",            ATTR_INLINE },
+  { TAG_INPUT,          "src",            ATTR_INLINE },
+  { TAG_LAYER,          "src",            ATTR_INLINE | ATTR_HTML },
+  { TAG_OBJECT,         "data",           ATTR_INLINE },
+  { TAG_OBJECT,         "codebase",       ATTR_INLINE },
+  { TAG_OVERLAY,        "src",            ATTR_INLINE | ATTR_HTML },
+  { TAG_SCRIPT,         "src",            ATTR_INLINE },
+  { TAG_TABLE,          "background",     ATTR_INLINE },
+  { TAG_TD,             "background",     ATTR_INLINE },
+  { TAG_TH,             "background",     ATTR_INLINE },
+  { TAG_VIDEO,          "src",            ATTR_INLINE },
+  { TAG_VIDEO,          "poster",         ATTR_INLINE },
+  { TAG_AUDIO,          "src",            ATTR_INLINE },
+  { TAG_AUDIO,          "poster",         ATTR_INLINE },
+  { TAG_SOURCE,         "src",            ATTR_INLINE },
+  { TAG_DEL,            "cite",           ATTR_HTML },
+  { TAG_INS,            "cite",           ATTR_HTML },
+  { TAG_Q,              "cite",           ATTR_HTML },
+  { TAG_TRACK,          "src",            ATTR_INLINE },
+  { TAG_IMAGE,          "src",            ATTR_INLINE },
+  { TAG_IMAGE,          "xlink:href",     ATTR_HTML },
+  { TAG_DIV,            "src",            ATTR_INLINE },
+  { TAG_DIV,            "data-src",       ATTR_INLINE },
+  { TAG_DIV,            "data-uri",       ATTR_INLINE },
+  { TAG_DIV,            "data-url",       ATTR_INLINE },
+  { TAG_DIV,            "data-href",      ATTR_HTML },
+  { TAG_DIV,            "data-image-url", ATTR_INLINE },
+  { TAG_DIV,            "data-card-url",  ATTR_INLINE },
+  { TAG_SPAN,           "src",            ATTR_INLINE },
+  /*{ TAG_SPAN,           "data-src",       ATTR_INLINE },*/
+  { TAG_SPAN,           "data-uri",       ATTR_INLINE },
+  { TAG_SPAN,           "data-href",      ATTR_HTML },
+  { TAG_LI,             "src",            ATTR_INLINE },
+  { TAG_LI,             "data-src",       ATTR_INLINE },
+  { TAG_LI,             "data-uri",       ATTR_INLINE },
+  { TAG_LI,             "data-href",      ATTR_HTML },
+  { TAG_META,           "url",            ATTR_HTML },
+};
+
+static struct {
+  int tagid;
+  const char *condition_attr_name;
+  const char *condition_attr_value;
+  const char *attr_name;
+  int flags;
+} tag_condition_url_attributes[] = {
+  { TAG_META,       "property",     "og:image",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:url",                   "content",  ATTR_HTML | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:audio",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:video",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:audio:url",             "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:audio:secure_url",      "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:video:url",             "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:video:secure_url",      "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:image:url",             "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "og:image:secure_url",      "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "property",     "msapplication-TileImage",  "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "name",         "og:image",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "name",         "og:url",                   "content",  ATTR_HTML | ATTR_IGNORE },
+  { TAG_META,       "name",         "og:audio",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "name",         "og:video",                 "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "name",         "twitter:url",              "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "name",         "twitter:image",            "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "itemprop",     "thumbnailUrl",             "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "itemprop",     "url",                      "content",  ATTR_HTML | ATTR_IGNORE },
+  { TAG_META,       "itemprop",     "image",                    "content",  ATTR_INLINE | ATTR_IGNORE },
+  { TAG_META,       "itemprop",     "target",                   "content",  ATTR_HTML | ATTR_IGNORE },
+  { TAG_INPUT,      "class",        "share-input",              "value",    ATTR_HTML },
+  { TAG_PARAM,      "valuetype",    "ref",                      "value",    ATTR_INLINE },
+  { TAG_PARAM,      "name",         "movie",                    "value",    ATTR_INLINE },
+  { TAG_PARAM,      "name",         "archive",                  "value",    ATTR_INLINE },
+  { TAG_PARAM,      "name",         "src",                      "value",    ATTR_INLINE }
 };
 
 /* The lists of interesting tags and attributes are built dynamically,
@@ -184,7 +274,14 @@ static const char *additional_attributes[] = {
   "content",                    /* used by tag_handle_meta  */
   "action",                     /* used by tag_handle_form  */
   "style",                      /* used by check_style_attr */
-  "srcset",                     /* used by tag_handle_img */
+  "srcset",                     /* used by tag_handle_for_srcset */
+  "data-srcset",                /* used by tag_handle_for_srcset */
+};
+
+/* Used in tag_handle_for_srcset for extracting URLs from srcset attributes. */
+static const char *srcset_attributes[] = {
+  "srcset",
+  "data-srcset"
 };
 
 static struct hash_table *interesting_tags;
@@ -247,6 +344,13 @@ init_interesting (void)
   for (i = 0; i < countof (tag_url_attributes); i++)
     hash_table_put (interesting_attributes,
                     tag_url_attributes[i].attr_name, "1");
+  for (i = 0; i < countof (tag_condition_url_attributes); i++)
+    {
+      hash_table_put (interesting_attributes,
+                      tag_condition_url_attributes[i].condition_attr_name, "1");
+      hash_table_put (interesting_attributes,
+                      tag_condition_url_attributes[i].attr_name, "1");
+    }
 }
 
 /* Find the value of attribute named NAME in the taginfo TAG.  If the
@@ -412,6 +516,28 @@ check_style_attr (struct taginfo *tag, struct map_context *ctx)
   get_urls_css (ctx, raw_start, raw_len);
 }
 
+/* Queue a single URL using flags from tag_find_urls. */
+
+struct urlpos *
+tag_queue_url_flags (char *link, int attrind, int flags, struct taginfo *tag,
+               struct map_context *ctx)
+{
+  struct urlpos *up = append_url (link, ATTR_POS(tag,attrind,ctx),
+                                  ATTR_SIZE(tag,attrind), ctx);
+
+  if (up)
+    {
+      if (flags & ATTR_INLINE)
+        up->link_inline_p = 1;
+      if (flags & ATTR_HTML)
+        up->link_expect_html = 1;
+      if (flags & ATTR_IGNORE)
+        up->ignore_when_downloading = 1;
+    }
+
+  return up;
+}
+
 /* All the tag_* functions are called from collect_tags_mapper, as
    specified by KNOWN_TAGS.  */
 
@@ -424,6 +550,8 @@ tag_find_urls (int tagid, struct taginfo *tag, struct map_context *ctx)
   size_t i;
   int attrind;
   int first = -1;
+  const char *condition_name = NULL;
+  int condition_flags = -1;
 
   for (i = 0; i < countof (tag_url_attributes); i++)
     if (tag_url_attributes[i].tagid == tagid)
@@ -434,6 +562,31 @@ tag_find_urls (int tagid, struct taginfo *tag, struct map_context *ctx)
         break;
       }
   assert (first != -1);
+
+  /* Loop over the condition tag attributes and over the tags for each possible
+     attribute. If the tag is found to contain a certain attribute name with
+     certain value, the loop is stopped and the corresponding attribute to queue
+     is registered for queuing.
+
+     Only a single condition per tag is supported for matching. */
+
+  for (i = 0; i < countof (tag_condition_url_attributes); i++)
+    {
+      if (tag_condition_url_attributes[i].tagid == tagid)
+        for (attrind = 0; attrind < tag->nattrs; attrind++)
+          if (0 == strcasecmp (tag->attrs[attrind].name,
+                               tag_condition_url_attributes[i].condition_attr_name)
+           && 0 == strcasecmp (tag->attrs[attrind].value,
+                               tag_condition_url_attributes[i].condition_attr_value))
+            {
+              condition_name = tag_condition_url_attributes[i].attr_name;
+              condition_flags = tag_condition_url_attributes[i].flags;
+              break;
+            }
+      /* Already found a matching condition. */
+      if (condition_flags != -1)
+        break;
+    }
 
   /* Loop over the "interesting" attributes of this tag.  In this
      example, it will loop over "src" and "lowsrc".
@@ -451,6 +604,10 @@ tag_find_urls (int tagid, struct taginfo *tag, struct map_context *ctx)
       char *link = tag->attrs[attrind].value;
       const size_t size = countof (tag_url_attributes);
 
+      if (condition_flags != -1
+          && 0 == strcasecmp(tag->attrs[attrind].name, condition_name))
+        tag_queue_url_flags (link, attrind, condition_flags, tag, ctx);
+
       /* If you're cringing at the inefficiency of the nested loops,
          remember that they both iterate over a very small number of
          items.  The worst-case inner loop is for the IMG tag, which
@@ -459,18 +616,7 @@ tag_find_urls (int tagid, struct taginfo *tag, struct map_context *ctx)
         {
           if (0 == strcasecmp (tag->attrs[attrind].name,
                                tag_url_attributes[i].attr_name))
-            {
-              struct urlpos *up = append_url (link, ATTR_POS(tag,attrind,ctx),
-                                              ATTR_SIZE(tag,attrind), ctx);
-              if (up)
-                {
-                  int flags = tag_url_attributes[i].flags;
-                  if (flags & ATTR_INLINE)
-                    up->link_inline_p = 1;
-                  if (flags & ATTR_HTML)
-                    up->link_expect_html = 1;
-                }
-            }
+            tag_queue_url_flags (link, attrind, tag_url_attributes[i].flags, tag, ctx);
         }
     }
 }
@@ -513,7 +659,10 @@ tag_handle_form (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
       struct urlpos *up = append_url (action, ATTR_POS(tag,attrind,ctx),
                                       ATTR_SIZE(tag,attrind), ctx);
       if (up)
-        up->ignore_when_downloading = 1;
+        {
+          up->ignore_when_downloading = 1;
+          up->link_expect_html = 1;
+        }
     }
 }
 
@@ -546,7 +695,14 @@ tag_handle_link (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
                   up->link_inline_p = 1;
                   up->link_expect_css = 1;
                 }
-              else if (0 == c_strcasecmp (rel, "shortcut icon") || 0 == c_strcasecmp (rel, "icon"))
+              else if (
+                0 == c_strcasecmp (rel, "shortcut icon")
+                || 0 == c_strcasecmp (rel, "icon")
+                || 0 == c_strcasecmp (rel, "image_src")
+                || 0 == c_strcasecmp (rel, "mask-icon")
+                || 0 == c_strcasecmp (rel, "apple-touch-icon")
+                || 0 == c_strcasecmp (rel, "apple-touch-icon-precomposed")
+              )
                 {
                   up->link_inline_p = 1;
                 }
@@ -574,10 +730,17 @@ tag_handle_link (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
    refresh feature and because of robot exclusion.  */
 
 static void
-tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *ctx)
+tag_handle_meta (int tagid, struct taginfo *tag, struct map_context *ctx)
 {
   char *name = find_attr (tag, "name", NULL);
   char *http_equiv = find_attr (tag, "http-equiv", NULL);
+
+  tag_find_urls(tagid, tag, ctx);
+
+  int attrind;
+  char *content = find_attr (tag, "content", &attrind);
+  if (!content)
+    return;
 
   if (http_equiv && 0 == c_strcasecmp (http_equiv, "refresh"))
     {
@@ -591,15 +754,10 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
          get to the URL.  */
 
       struct urlpos *entry;
-      int attrind;
       int timeout;
       char *p;
 
-      char *refresh = find_attr (tag, "content", &attrind);
-      if (!refresh)
-        return;
-
-      timeout = strtol(refresh, &p, 10);
+      timeout = strtol(content, &p, 10);
 
       if (timeout < 0 || *p++ != ';')
         return;
@@ -615,8 +773,6 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
       while (c_isspace (*p))
         ++p;
 
-      entry = append_url (p, ATTR_POS(tag,attrind,ctx),
-                          ATTR_SIZE(tag,attrind), ctx);
       if (entry)
         {
           entry->link_refresh_p = 1;
@@ -630,9 +786,6 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
          <meta http-equiv="Content-Type" content="text/html; charset=CHARSET"> */
 
       char *mcharset;
-      char *content = find_attr (tag, "content", NULL);
-      if (!content)
-        return;
 
       mcharset = parse_charset (content);
       if (!mcharset)
@@ -645,9 +798,6 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
     {
       /* Handle stuff like:
          <meta name="robots" content="index,nofollow"> */
-      char *content = find_attr (tag, "content", NULL);
-      if (!content)
-        return;
       if (!c_strcasecmp (content, "none"))
         ctx->nofollow = true;
       else
@@ -684,83 +834,88 @@ tag_handle_meta (int tagid _GL_UNUSED, struct taginfo *tag, struct map_context *
 */
 
 static void
-tag_handle_img (int tagid, struct taginfo *tag, struct map_context *ctx) {
-  int attrind;
+attr_handle_srcset (int attrind, char *srcset, struct taginfo *tag, struct map_context *ctx) {
+  /* These are relative to the input text. */
+  int base_ind = ATTR_POS (tag,attrind,ctx);
+  int size = strlen (srcset);
+
+  /* These are relative to srcset. */
+  int offset, url_start, url_end;
+
+  /* Make sure to line up base_ind with srcset[0], not outside quotes. */
+  if (ctx->text[base_ind] == '"' || ctx->text[base_ind] == '\'')
+    ++base_ind;
+
+  offset = 0;
+  while (offset < size)
+    {
+      bool has_descriptor = true;
+
+      /* Skip over initial whitespace and commas. Note there is no \v
+        in HTML5 whitespace. */
+      url_start = offset + strspn (srcset + offset, " \f\n\r\t,");
+
+      if (url_start == size)
+        return;
+
+      /* URL is any non-whitespace chars (including commas) - but with
+         trailing commas removed. */
+      url_end = url_start + strcspn (srcset + url_start, " \f\n\r\t");
+      while ((url_end - 1) > url_start && srcset[url_end - 1] == ',')
+        {
+          has_descriptor = false;
+          --url_end;
+        }
+
+      if (url_end > url_start)
+        {
+          char *url_text = strdupdelim (srcset + url_start,
+                                        srcset + url_end);
+          struct urlpos *up = append_url (url_text, base_ind + url_start,
+                                          url_end - url_start, ctx);
+          if (up)
+            {
+              up->link_inline_p = 1;
+              up->link_noquote_html_p = 1;
+            }
+          xfree (url_text);
+        }
+
+      /* If the URL wasn't terminated by a , there may also be a descriptor
+         which we just skip. */
+      if (has_descriptor)
+        {
+          /* This is comma-terminated, except there may be one level of
+             parentheses escaping that. */
+          bool in_paren = false;
+          for (offset = url_end; offset < size; ++offset)
+            {
+              char c = srcset[offset];
+              if (c == '(')
+                in_paren = true;
+              else if (c == ')' && in_paren)
+                in_paren = false;
+              else if (c == ',' && !in_paren)
+                break;
+            }
+        }
+      else
+        offset = url_end;
+    }
+}
+
+static void
+tag_handle_for_srcset (int tagid, struct taginfo *tag, struct map_context *ctx) {
+  int attrind, i;
   char *srcset;
 
-  /* Use the generic approach for the attributes without special syntax. */
   tag_find_urls(tagid, tag, ctx);
 
-  srcset = find_attr (tag, "srcset", &attrind);
-  if (srcset)
+  for (i = 0; i < countof (srcset_attributes); i++)
     {
-      /* These are relative to the input text. */
-      int base_ind = ATTR_POS (tag,attrind,ctx);
-      int size = strlen (srcset);
-
-      /* These are relative to srcset. */
-      int offset, url_start, url_end;
-
-      /* Make sure to line up base_ind with srcset[0], not outside quotes. */
-      if (ctx->text[base_ind] == '"' || ctx->text[base_ind] == '\'')
-        ++base_ind;
-
-      offset = 0;
-      while (offset < size)
-        {
-          bool has_descriptor = true;
-
-          /* Skip over initial whitespace and commas. Note there is no \v
-            in HTML5 whitespace. */
-          url_start = offset + strspn (srcset + offset, " \f\n\r\t,");
-
-          if (url_start == size)
-            return;
-
-          /* URL is any non-whitespace chars (including commas) - but with
-             trailing commas removed. */
-          url_end = url_start + strcspn (srcset + url_start, " \f\n\r\t");
-          while ((url_end - 1) > url_start && srcset[url_end - 1] == ',')
-            {
-              has_descriptor = false;
-              --url_end;
-            }
-
-          if (url_end > url_start)
-            {
-              char *url_text = strdupdelim (srcset + url_start,
-                                            srcset + url_end);
-              struct urlpos *up = append_url (url_text, base_ind + url_start,
-                                              url_end - url_start, ctx);
-              if (up)
-                {
-                  up->link_inline_p = 1;
-                  up->link_noquote_html_p = 1;
-                }
-              xfree (url_text);
-            }
-
-          /* If the URL wasn't terminated by a , there may also be a descriptor
-             which we just skip. */
-          if (has_descriptor)
-            {
-              /* This is comma-terminated, except there may be one level of
-                 parentheses escaping that. */
-              bool in_paren = false;
-              for (offset = url_end; offset < size; ++offset)
-                {
-                  char c = srcset[offset];
-                  if (c == '(')
-                    in_paren = true;
-                  else if (c == ')' && in_paren)
-                    in_paren = false;
-                  else if (c == ',' && !in_paren)
-                    break;
-                }
-            }
-          else
-            offset = url_end;
-        }
+      srcset = find_attr (tag, srcset_attributes[i], &attrind);
+      if (srcset)
+        attr_handle_srcset (attrind, srcset, tag, ctx);
     }
 }
 

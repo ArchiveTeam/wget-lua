@@ -529,12 +529,6 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                 {
                   reject_reason r;
 
-                  if (child->ignore_when_downloading)
-                    {
-                      DEBUGP (("Not following due to 'ignore' flag: %s\n", child->url->url));
-                      continue;
-                    }
-
                   if (dash_p_leaf_HTML && !child->link_inline_p)
                     {
                       DEBUGP (("Not following due to 'link inline' flag: %s\n", child->url->url));
@@ -715,6 +709,13 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
       goto out;
     }
 
+  if (upos->ignore_when_downloading)
+    {
+      DEBUGP (("Not following due to 'ignore' flag: %s\n", url));
+      reason = WG_RR_IGNORE;
+      goto out;
+    }
+
   /* Several things to check for:
      1. if scheme is not https and https_only requested
      2. if scheme is not http, and we don't load it
@@ -749,7 +750,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
   /* Determine whether URL under consideration has a HTTP-like scheme. */
   u_scheme_like_http = schemes_are_similar_p (u->scheme, SCHEME_HTTP);
 
-  /* 1. Schemes other than HTTP are normally not recursed into. */
+  /* 2. Schemes other than HTTP are normally not recursed into. */
   if (!u_scheme_like_http && !((u->scheme == SCHEME_FTP
 #ifdef HAVE_SSL
       || u->scheme == SCHEME_FTPS
@@ -761,7 +762,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
       goto out;
     }
 
-  /* 2. If it is an absolute link and they are not followed, throw it
+  /* 3. If it is an absolute link and they are not followed, throw it
      out.  */
   if (u_scheme_like_http)
     if (opt.relative_only && !upos->link_relative_p)
@@ -771,7 +772,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
         goto out;
       }
 
-  /* 3. If its domain is not to be accepted/looked-up, chuck it
+  /* 4. If its domain is not to be accepted/looked-up, chuck it
      out.  */
   if (!accept_domain (u))
     {
@@ -780,7 +781,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
       goto out;
     }
 
-  /* 4. Check for parent directory.
+  /* 5. Check for parent directory.
 
      If we descended to a different host or changed the scheme, ignore
      opt.no_parent.  Also ignore it for documents needed to display
@@ -801,7 +802,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
         }
     }
 
-  /* 5. If the file does not match the acceptance list, or is on the
+  /* 6. If the file does not match the acceptance list, or is on the
      rejection list, chuck it out.  The same goes for the directory
      exclusion and inclusion lists.  */
   if (opt.includes || opt.excludes)
@@ -820,7 +821,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
       goto out;
     }
 
-  /* 6. Check for acceptance/rejection rules.  We ignore these rules
+  /* 7. Check for acceptance/rejection rules.  We ignore these rules
      for directories (no file name to match) and for non-leaf HTMLs,
      which can lead to other files that do need to be downloaded.  (-p
      automatically implies non-leaf because with -p we can, if
@@ -846,7 +847,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
         }
     }
 
-  /* 7. */
+  /* 8. */
   if (schemes_are_similar_p (u->scheme, parent->scheme))
     if (!opt.spanhost && 0 != strcasecmp (parent->host, u->host))
       {
@@ -856,7 +857,7 @@ download_child (const struct urlpos *upos, struct url *parent, int depth,
         goto out;
       }
 
-  /* 8. */
+  /* 9. */
   if (opt.use_robots && u_scheme_like_http)
     {
       struct robot_specs *specs = res_get_specs (u->host, u->port);
@@ -1040,6 +1041,8 @@ write_reject_log_reason (FILE *fp, reject_reason reason,
       case WG_RR_RULES:       reason_str = "RULES";       break;
       case WG_RR_SPANNEDHOST: reason_str = "SPANNEDHOST"; break;
       case WG_RR_ROBOTS:      reason_str = "ROBOTS";      break;
+      case WG_RR_LUAHOOK:     reason_str = "LUAHOOK";     break;
+      case WG_RR_IGNORE:      reason_str = "IGNORE";      break;
       default:                reason_str = "UNKNOWN";     break;
     }
 
