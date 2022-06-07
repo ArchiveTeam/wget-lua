@@ -773,6 +773,8 @@ tag_handle_meta (int tagid, struct taginfo *tag, struct map_context *ctx)
       while (c_isspace (*p))
         ++p;
 
+      entry = append_url (p, ATTR_POS(tag,attrind,ctx),
+                          ATTR_SIZE(tag,attrind), ctx);
       if (entry)
         {
           entry->link_refresh_p = 1;
