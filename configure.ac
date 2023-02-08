@@ -911,6 +911,8 @@ AS_IF([test "X$with_cares" = "Xyes"],[
       LIBS="$CARES_LIBS $LIBS"
       AC_DEFINE([HAVE_LIBCARES], [1], [Define if libcares is available.])
       RESOLVER_INFO="libcares, --bind-dns-address and --dns-servers available"
+    ], [
+      AC_MSG_ERROR([cares not found])
     ])
   ], [
     AC_CHECK_HEADER(ares.h, [
@@ -918,7 +920,11 @@ AS_IF([test "X$with_cares" = "Xyes"],[
         LIBS="-lcares ${LIBS}"
         AC_DEFINE([HAVE_LIBCARES], 1, [Define if libcares is available.])
         RESOLVER_INFO="libcares, --bind-dns-address and --dns-servers available"
+      ], [
+        AC_MSG_ERROR([cares not found])
       ])
+    ], [
+      AC_MSG_ERROR([cares not found])
     ])
   ])
 ], [
