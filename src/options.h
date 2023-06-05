@@ -104,6 +104,9 @@ struct options
 #ifdef HAVE_LIBCARES
   char *bind_dns_address;
   char *dns_servers;
+  char **host_lookups;          /* List of methods of host lookups */
+  char *hosts_file;             /* Hosts file to use */
+  char *resolvconf_file;        /* Resolv.conf file to use */
 #endif
 
   char **domains;               /* See host.c */

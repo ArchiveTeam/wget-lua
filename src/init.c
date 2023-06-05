@@ -219,6 +219,10 @@ static const struct {
   { "ftpuser",          &opt.ftp_user,          cmd_string },
   { "glob",             &opt.ftp_glob,          cmd_boolean },
   { "header",           NULL,                   cmd_spec_header },
+#ifdef HAVE_LIBCARES
+  { "hostlookups",      &opt.host_lookups,      cmd_vector },
+  { "hostsfile",        &opt.hosts_file,        cmd_file },
+#endif
 #ifdef HAVE_HSTS
   { "hsts",             &opt.hsts,              cmd_boolean },
   { "hstsfile",         &opt.hsts_file,         cmd_file },
@@ -316,6 +320,9 @@ static const struct {
   { "remoteencoding",   &opt.encoding_remote,   cmd_string },
   { "removelisting",    &opt.remove_listing,    cmd_boolean },
   { "reportspeed",             &opt.report_bps, cmd_spec_report_speed},
+#ifdef HAVE_LIBCARES
+  { "resolvconffile",   &opt.resolvconf_file,   cmd_file },
+#endif
   { "restrictfilenames", NULL,                  cmd_spec_restrict_file_names },
   { "retrsymlinks",     &opt.retr_symlinks,     cmd_boolean },
   { "retryconnrefused", &opt.retry_connrefused, cmd_boolean },
@@ -2096,6 +2103,9 @@ cleanup (void)
 
     xfree (opt.bind_dns_address);
     xfree (opt.dns_servers);
+    xfree (opt.hosts_file);
+    xfree (opt.resolvconf_file);
+    free_vec (opt.host_lookups);
     ares_destroy (ares);
     ares_library_cleanup ();
   }

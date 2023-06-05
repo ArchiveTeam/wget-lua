@@ -336,6 +336,10 @@ static struct cmdline_option option_data[] =
     { "header", 0, OPT_VALUE, "header", -1 },
     { "help", 'h', OPT_FUNCALL, (void *)print_help, no_argument },
     { "host-directories", 0, OPT_BOOLEAN, "addhostdir", -1 },
+#ifdef HAVE_LIBCARES
+    { "host-lookups", 0, OPT_VALUE, "hostlookups", -1 },
+    { "hosts-file", 0, OPT_VALUE, "hostsfile", -1 },
+#endif
 #ifdef HAVE_HSTS
     { "hsts", 0, OPT_BOOLEAN, "hsts", -1},
     { "hsts-file", 0, OPT_VALUE, "hstsfile", -1 },
@@ -422,6 +426,9 @@ static struct cmdline_option option_data[] =
     { "remote-encoding", 0, OPT_VALUE, "remoteencoding", -1 },
     { "remove-listing", 0, OPT_BOOLEAN, "removelisting", -1 },
     { "report-speed", 0, OPT_BOOLEAN, "reportspeed", -1 },
+#ifdef HAVE_LIBCARES
+    { "resolvconf-file", 0, OPT_VALUE, "resolvconffile", -1 },
+#endif
     { "restrict-file-names", 0, OPT_BOOLEAN, "restrictfilenames", -1 },
     { "retr-symlinks", 0, OPT_BOOLEAN, "retrsymlinks", -1 },
     { "retry-connrefused", 0, OPT_BOOLEAN, "retryconnrefused", -1 },
@@ -707,6 +714,12 @@ Download:\n"),
        --dns-servers=ADDRESSES     list of DNS servers to query (comma separated)\n"),
     N_("\
        --bind-dns-address=ADDRESS  bind DNS resolver to ADDRESS (hostname or IP) on local host\n"),
+    N_("\
+       --host-lookups=STRING       order of host lookups with 'b' for DNS and 'f' for hosts file\n"),
+    N_("\
+       --hosts-file=FILE           hosts FILE other than the default location\n"),
+    N_("\
+       --resolvconf-file=FILE      resolv.conf FILE other than the default location\n"),
 #endif
     N_("\
        --dns-timeout=SECS          set the DNS lookup timeout to SECS\n"),
@@ -2125,7 +2138,7 @@ only if outputting to a regular file.\n"));
     }
 
 #ifdef HAVE_LIBCARES
-  if (opt.bind_dns_address || opt.dns_servers)
+  if (opt.bind_dns_address || opt.dns_servers || opt.host_lookups || opt.hosts_file || opt.resolvconf_file)
     {
       if (ares_library_init (ARES_LIB_INIT_ALL))
         {
@@ -2133,7 +2146,62 @@ only if outputting to a regular file.\n"));
           exit (WGET_EXIT_GENERIC_ERROR);
         }
 
-      if (ares_init (&ares) != ARES_SUCCESS)
+      if (opt.host_lookups || opt.hosts_file || opt.resolvconf_file)
+        {
+          struct ares_options options;
+          int optmask = 0;
+
+          if (opt.host_lookups)
+            {
+              char lookups[10] = "";
+              int i;
+
+              for (i = 0; opt.host_lookups[i]; i++)
+                {
+                  char *lookup_c;
+
+                  if (strlen (lookups) == 9)
+                    {
+                      fprintf (stderr, _("Up to 9 options supported in --host-lookups\n"));
+                      exit (WGET_EXIT_GENERIC_ERROR);
+                    }
+
+                  if (strcasecmp (opt.host_lookups[i], "dns") == 0)
+                    lookup_c = "b";
+                  else if (strcasecmp (opt.host_lookups[i], "hosts") == 0)
+                    lookup_c = "f";
+                  else
+                    {
+                      fprintf (stderr, _("Unsupported --host-lookups option\n"));
+                      exit (WGET_EXIT_GENERIC_ERROR);
+                    }
+
+                  strcat (lookups, lookup_c);
+                }
+
+              optmask = optmask | ARES_OPT_LOOKUPS;
+              options.lookups = lookups;
+            }
+
+          if (opt.resolvconf_file)
+            {
+              optmask = optmask | ARES_OPT_RESOLVCONF;
+              options.resolvconf_path = opt.resolvconf_file;
+            }
+
+          if (opt.hosts_file)
+            {
+              optmask = optmask | ARES_OPT_HOSTS_FILE;
+              options.hosts_path = opt.hosts_file;
+            }
+
+	        if (ares_init_options (&ares, &options, optmask) != ARES_SUCCESS)
+            {
+              fprintf (stderr, _("Failed to init c-ares channel with options\n"));
+              exit (WGET_EXIT_GENERIC_ERROR);
+            }
+        }
+      else if (ares_init (&ares) != ARES_SUCCESS)
         {
           fprintf (stderr, _("Failed to init c-ares channel\n"));
           exit (WGET_EXIT_GENERIC_ERROR);
