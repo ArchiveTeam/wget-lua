@@ -575,23 +575,27 @@ struct luahooks_revisit *luahooks_dedup_response (const char *url, char *digest)
       {
         
         struct luahooks_revisit *answer = malloc (sizeof (struct luahooks_revisit));
+        const char *ret;
 
         // expects ISO-8601 timestamp
         lua_getfield (lua, -1, "date");
-        answer->date = lua_tostring (lua, -1);
+        ret = lua_tostring (lua, -1);
+        answer->date = strdup (ret);
         lua_pop (lua, 1);
 
         lua_getfield (lua, -1, "response_uuid");
         if (lua_type(lua, -1) != LUA_TNIL) {
               //expects <urn:uuid:%s>
-              answer->response_uuid = lua_tostring (lua, -1);
+              ret = lua_tostring (lua, -1);
+              answer->response_uuid = strdup (ret);
             } else {
               answer->response_uuid = NULL;
             }
         lua_pop (lua, 1);
 
         lua_getfield (lua, -1, "target_uri");
-        answer->target_uri = lua_tostring (lua, -1);
+        ret = lua_tostring (lua, -1);
+        answer->target_uri = strdup (ret);
         lua_pop (lua, 1);
         return answer;
       } 
