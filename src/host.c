@@ -71,6 +71,97 @@ as that of the covered work.  */
 extern int h_errno;
 #endif
 
+/* The following contains a list of reserved IP blocks/subnets according to
+   - https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+   - https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml
+ */
+static struct reserved_subnet {
+  const char *subnet;           /* the reserved block */
+  const char *name;             /* descriptive name */
+  const char *rfc;              /* RFC the reserved block originated from */
+  bool terminated;              /* if the reservation is still active */
+  /* N/A = -1; True = 1; False = 0; */
+  int source;
+  int destination;
+  int forwardable;
+  int global;
+  int reserved_by_protocol;
+} reserved_subnets[] = {
+  { "0.0.0.0/8", "\"This network\"", "[RFC791], Section 3.2", false, 1, 0, 0, 0, 1 },
+  { "0.0.0.0/32", "\"This host on this network\"", "[RFC1122], Section 3.2.1.3", false, 1, 0, 0, 0, 1 },
+  { "10.0.0.0/8", "Private-Use", "[RFC1918]", false, 1, 1, 1, 0, 0 },
+  { "100.64.0.0/10", "Shared Address Space", "[RFC6598]", false, 1, 1, 1, 0, 0 },
+  { "127.0.0.0/8", "Loopback", "[RFC1122], Section 3.2.1.3", false, 0, 0, 0, 0, 1 },
+  { "169.254.0.0/16", "Link Local", "[RFC3927]", false, 1, 1, 0, 0, 1 },
+  { "172.16.0.0/12", "Private-Use", "[RFC1918]", false, 1, 1, 1, 0, 0 },
+  { "192.0.0.0/24", "IETF Protocol Assignments", "[RFC6890], Section 2.1", false, 0, 0, 0, 0, 0 },
+  { "192.0.0.0/29", "IPv4 Service Continuity Prefix", "[RFC7335]", false, 1, 1, 1, 0, 0 },
+  { "192.0.0.8/32", "IPv4 dummy address", "[RFC7600]", false, 1, 0, 0, 0, 0 },
+  { "192.0.0.9/32", "Port Control Protocol Anycast", "[RFC7723]", false, 1, 1, 1, 1, 0 },
+  { "192.0.0.10/32", "Traversal Using Relays around NAT Anycast", "[RFC8155]", false, 1, 1, 1, 1, 0 },
+  { "192.0.0.170/32", "NAT64/DNS64 Discovery", "[RFC8880][RFC7050], Section 2.2", false, 0, 0, 0, 0, 1 },
+  { "192.0.0.171/32", "NAT64/DNS64 Discovery", "[RFC8880][RFC7050], Section 2.2", false, 0, 0, 0, 0, 1 },
+  { "192.0.2.0/24", "Documentation (TEST-NET-1)", "[RFC5737]", false, 0, 0, 0, 0, 0 },
+  { "192.31.196.0/24", "AS112-v4", "[RFC7535]", false, 1, 1, 1, 1, 0 },
+  { "192.52.193.0/24", "AMT", "[RFC7450]", false, 1, 1, 1, 1, 0 },
+  { "192.88.99.0/24", "6to4 Relay Anycast", "[RFC7526]", true, 1, 1, 1, 1, 0 },
+  { "192.168.0.0/16", "Private-Use", "[RFC1918]", false, 1, 1, 1, 0, 0 },
+  { "192.175.48.0/24", "Direct Delegation AS112 Service", "[RFC7534]", false, 1, 1, 1, 1, 0 },
+  { "198.18.0.0/15", "Benchmarking", "[RFC2544]", false, 1, 1, 1, 0, 0 },
+  { "198.51.100.0/24", "Documentation (TEST-NET-2)", "[RFC5737]", false, 0, 0, 0, 0, 0 },
+  { "203.0.113.0/24", "Documentation (TEST-NET-3)", "[RFC5737]", false, 0, 0, 0, 0, 0 },
+  { "240.0.0.0/4", "Reserved", "[RFC1112], Section 4", false, 0, 0, 0, 0, 1 },
+  { "255.255.255.255/32", "Limited Broadcast", "[RFC8190][RFC919], Section 7", false, 0, 1, 0, 0, 1 },
+#ifdef ENABLE_IPV6
+  { "::1/128", "Loopback Address", "[RFC4291]", false, 0, 0, 0, 0, 1 },
+  { "::/128", "Unspecified Address", "[RFC4291]", false, 1, 0, 0, 0, 1 },
+  { "::ffff:0:0/96", "IPv4-mapped Address", "[RFC4291]", false, 0, 0, 0, 0, 1 },
+  { "64:ff9b::/96", "IPv4-IPv6 Translat.", "[RFC6052]", false, 1, 1, 1, 1, 0 },
+  { "64:ff9b:1::/48", "IPv4-IPv6 Translat.", "[RFC8215]", false, 1, 1, 1, 0, 0 },
+  { "100::/64", "Discard-Only Address Block", "[RFC6666]", false, 1, 1, 1, 0, 0 },
+  { "2001::/23", "IETF Protocol Assignments", "[RFC2928]", false, 0, 0, 0, 0, 0 },
+  { "2001::/32", "TEREDO", "[RFC4380][RFC8190]", false, 1, 1, 1, -1, 0 },
+  { "2001:1::1/128", "Port Control Protocol Anycast", "[RFC7723]", false, 1, 1, 1, 1, 0 },
+  { "2001:1::2/128", "Traversal Using Relays around NAT Anycast", "[RFC8155]", false, 1, 1, 1, 1, 0 },
+  { "2001:2::/48", "Benchmarking", "[RFC5180][RFC Errata 1752]", false, 1, 1, 1, 0, 0 },
+  { "2001:3::/32", "AMT", "[RFC7450]", false, 1, 1, 1, 1, 0 },
+  { "2001:4:112::/48", "AS112-v6", "[RFC7535]", false, 1, 1, 1, 1, 0 },
+  { "2001:10::/28", "ORCHID", "[RFC4843]", true, 0, 0, 0, 0, 0 },
+  { "2001:20::/28", "ORCHIDv2", "[RFC7343]", false, 1, 1, 1, 1, 0 },
+  { "2001:30::/28", "Drone Remote ID Protocol Entity Tags (DETs) Prefix", "[RFC9374]", false, 1, 1, 1, 1, 0 },
+  { "2001:db8::/32", "Documentation", "[RFC3849]", false, 0, 0, 0, 0, 0 },
+  { "2002::/16", "6to4", "[RFC3056]", false, 1, 1, 1, -1, 0 },
+  { "2620:4f:8000::/48", "Direct Delegation AS112 Service", "[RFC7534]", false, 1, 1, 1, 1, 0 },
+  { "fc00::/7", "Unique-Local", "[RFC4193][RFC8190]", false, 1, 1, 1, 0, 0 },
+  { "fe80::/10", "Link-Local Unicast", "[RFC4291]", false, 1, 1, 0, 0, 1 }
+#endif
+};
+
+/* Struct containing a subnet formed of the IP, mask, and in case of IPv4 the
+   masked IP and shift for other IP. */
+
+typedef struct {
+  /* The mask for what bits to match. */
+  int mask;
+  /* Subnet start IP. */
+  ip_address ip;
+  /* The masked host byte order version of the IPv4 address. */
+  uint32_t masked4;
+  /* The shift to use on the other IPv4 address. */
+  int mask_shift4;
+} subnet;
+
+/* Struct containing a list of subnets. */
+
+typedef struct {
+  int count;
+  subnet *subnets;
+} subnets_list;
+
+/* The reserved or user set accepted/rejected subnets. */
+static subnets_list *reserved_subnets_list = NULL;
+static subnets_list *accepted_subnets_list = NULL;
+static subnets_list *rejected_subnets_list = NULL;
 
 /* Lists of IP addresses that result from running DNS queries.  See
    lookup_host for details.  */
@@ -107,6 +198,7 @@ address_list_address_at (const struct address_list *al, int pos)
 }
 
 /* Return true if AL contains IP, false otherwise.  */
+
 
 bool
 address_list_contains (const struct address_list *al, const ip_address *ip)
@@ -336,6 +428,248 @@ address_list_rotate (struct address_list *al)
       memcpy (&addresses[i], &addresses[i+1], sizeof (ip_address));
     memcpy (&addresses[count - 1], &tmp, sizeof (ip_address));
   }
+}
+
+/* Return true if one of the IP subnets contains the IP, else false. */
+
+bool
+subnets_list_contains (const subnets_list *list, const ip_address *ip)
+{
+  int i, j;
+  int mask_remain, mask_shift;
+  bool no_match;
+  uint32_t ip4_int;
+
+  if (list == NULL)
+    return false;
+  /* Convert to host bytes order. */
+  if (ip->family == AF_INET)
+    ip4_int = ntohl(ip->data.d4.s_addr);
+
+  /* Compare the masked IPs of matching families. */
+  for (i = 0; i < list->count; i++)
+    {
+      subnet *sub = list->subnets + i;
+
+      if (ip->family != sub->ip.family)
+        continue;
+
+      /* Shift the IP and compare with the subnet. */
+      if (ip->family == AF_INET
+          && ip4_int >> sub->mask_shift4 == sub->masked4)
+        return true;
+#ifdef ENABLE_IPV6
+      else if (ip->family == AF_INET6
+#ifdef HAVE_SOCKADDR_IN6_SCOPE_ID
+               && ip->ipv6_scope == sub->ip.ipv6_scope
+#endif
+              )
+        {
+          no_match = false;
+          /* For each of the 16 bytes of the parsed IPv6 address, check if the
+             byte should be entirely, partially or not equal. In the case the
+             byte should be partially equal, both are shifted and then compared.
+          */
+          for (j = 0; j < 16; j++)
+            {
+              mask_remain = sub->mask - j * 8;
+              if (mask_remain <= 0)
+                return true;
+              if (mask_remain >= 8)
+                mask_remain = 8;
+              mask_shift = 8 - mask_remain;
+              if (sub->ip.data.d6.s6_addr[j] << mask_shift != ip->data.d6.s6_addr[j] << mask_shift)
+                {
+                  no_match = true;
+                  break;
+                }
+            }
+          if (no_match)
+            continue;
+
+          return true;
+        }
+#endif
+     }
+
+  return false;
+}
+
+/* Parse a string consisting of IP and subnet mask and store result in given
+   subnet struct. If no subnet mask is give, the maximum subnet mask is taken
+   which effectively create a subnet of a single IP. */
+
+bool
+subnet_from_string (subnet *sub, const char *ip_str)
+{
+  char *token;
+  bool no_error = false;
+  int mask_bits;
+  int max_bits;
+  int mask_shift4;
+  uint32_t ip4_int;
+  struct in_addr a4;
+#ifdef ENABLE_IPV6
+  struct in6_addr a6;
+#endif
+
+  char *temp_ip_str = strdup (ip_str);
+
+  token = strtok (temp_ip_str, "/");
+
+  /* Parse subnet string for IPv4 of IPv6. */
+  if (inet_pton (AF_INET, token, &a4) == 1)
+    {
+      max_bits = 32;
+      ip4_int = ntohl(a4.s_addr);
+      sub->ip.data.d4 = a4;
+      sub->ip.family = AF_INET;
+    }
+#ifdef ENABLE_IPV6
+  else if (inet_pton (AF_INET6, token, &a6) == 1)
+    {
+      max_bits = 128;
+      sub->ip.data.d6 = a6;
+      sub->ip.family = AF_INET6;
+    }
+#endif
+  else
+    goto end;
+
+  token = strtok (NULL, "/");
+  mask_bits = 0;
+  if (token != NULL)
+    mask_bits = atoi (token);
+  if (mask_bits == 0)
+    mask_bits = max_bits;
+
+  if (mask_bits < 0 || mask_bits > max_bits)
+    goto end;
+
+  sub->mask = mask_bits;
+  /* In the case of IPv4, already shift the subnet IP. */
+  if (sub->ip.family == AF_INET)
+    {
+      mask_shift4 = max_bits - mask_bits;
+      sub->mask_shift4 = mask_shift4;
+      sub->masked4 = ip4_int >> mask_shift4;
+    }
+
+  no_error = true;
+
+ end:
+  xfree (temp_ip_str);
+  return no_error;
+}
+
+/* Create a subnet list of certain size. */
+
+subnets_list *
+init_subnets_list (int count)
+{
+  subnets_list *list;
+
+  list = xnew0 (subnets_list);
+  list->count = count;
+  list->subnets = xnew_array (subnet, count);
+
+  return list;
+}
+
+/* Init the reserved IPs in reserved_subnets into reserved_subnets_list. */
+
+void
+init_reserved_ips ()
+{
+  int i;
+  int count = 0;
+  int skipped = 0;
+
+  if (reserved_subnets_list != NULL)
+    abort ();
+
+  /* The terminated reserved subnets are skipped. */
+  for (i = 0; i < countof (reserved_subnets); i++)
+    if (!reserved_subnets[i].terminated)
+      count++;
+
+  reserved_subnets_list = init_subnets_list (count);
+
+  for (i = 0; i < countof (reserved_subnets); i++)
+    {
+      if (reserved_subnets[i].terminated)
+        {
+          skipped++;
+          continue;
+        }
+
+      DEBUGP (("Adding reject rule for reserved subnet %s.\n",
+               reserved_subnets[i].subnet));
+      if (!subnet_from_string (reserved_subnets_list->subnets + i - skipped,
+                               reserved_subnets[i].subnet))
+        abort ();
+    }
+}
+
+/* Check if an IP is accepted according to the user set accepted list. */
+
+bool
+is_accepted_ip_address (const ip_address *ip)
+{
+  return subnets_list_contains (accepted_subnets_list, ip);
+}
+
+/* Check if an IP is rejected according to possibly set reserved subnets, or the
+   user set rejected list. */
+
+bool
+is_rejected_ip_address (const ip_address *ip)
+{
+  return subnets_list_contains (rejected_subnets_list, ip)
+    || subnets_list_contains (reserved_subnets_list, ip);
+}
+
+/* Add the list of subnets strings to the internal accepted or rejected subnets
+   list according to the given type. This can only be done once for each type.
+   The supported types are REJECT and ACCEPT. */
+
+bool
+init_user_subnets_list (const char *type, char **subnets)
+{
+  int i;
+  int count = 0;
+
+  for (i = 0; subnets[i]; i++)
+    count++;
+
+  if (count == 0)
+    return true;
+
+  subnets_list *list = init_subnets_list (count);
+
+  for (i = 0; subnets[i]; i++)
+    {
+      DEBUGP (("Adding type %s rule for subnet %s.\n", type, subnets[i]));
+      if (!subnet_from_string (list->subnets + i, subnets[i]))
+        return false;
+    }
+
+  if (type == "REJECT")
+    {
+      if (rejected_subnets_list != NULL)
+        abort ();
+      rejected_subnets_list = list;
+    }
+  else if (type == "ACCEPT")
+    {
+      if (accepted_subnets_list != NULL)
+        abort();
+      accepted_subnets_list = list;
+    }
+  else
+    abort ();
+
+  return true;
 }
 
 /* Versions of gethostbyname and getaddrinfo that support timeout. */
@@ -1093,8 +1427,21 @@ host_cleanup (void)
       hash_table_destroy (host_name_addresses_map);
       host_name_addresses_map = NULL;
     }
+  if (reserved_subnets_list != NULL)
+    free_subnets_list (reserved_subnets_list);
+  if (accepted_subnets_list != NULL)
+    free_subnets_list (accepted_subnets_list);
+  if (rejected_subnets_list != NULL)
+    free_subnets_list (rejected_subnets_list);
 }
 #endif
+
+void
+free_subnets_list (subnets_list *subs)
+{
+  xfree (subs->subnets);
+  xfree (subs);
+}
 
 bool
 is_valid_ip_address (const char *name)

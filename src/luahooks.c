@@ -276,6 +276,7 @@ uerr_to_string (const uerr_t v)
       CONST_CASE (METALINK_SIG_ERROR)
       CONST_CASE (METALINK_MISSING_RESOURCE)
       CONST_CASE (RETR_WITH_METALINK)
+      CONST_CASE (IP_REJECTED)
     }
   return NULL;
 }

@@ -109,6 +109,10 @@ struct options
   char *resolvconf_file;        /* Resolv.conf file to use */
 #endif
 
+  char **accept_subnets;        /* Accept these subnets and IPs. */
+  char **reject_subnets;        /* Reject these subnets and IPs. */
+  bool reject_reserved_subnets; /* Reject reserved IPs according to RFC6890. */
+
   char **domains;               /* See host.c */
   char **exclude_domains;
   bool dns_cache;               /* whether we cache DNS lookups. */

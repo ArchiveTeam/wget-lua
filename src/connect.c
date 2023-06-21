@@ -263,12 +263,27 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
   struct sockaddr_storage ss;
   struct sockaddr *sa = (struct sockaddr *)&ss;
   int sock;
+  bool blocked = false;
+  bool allowed_explicit = false;
+
+  /* Check if this IP is in the list to be rejected. */
+  if (is_accepted_ip_address (ip))
+    allowed_explicit = true;
+
+  /* If the IP is explicitly allowed, it is never rejected. */
+  if (!allowed_explicit && is_rejected_ip_address (ip))
+    blocked = true;
 
   /* If PRINT is non-NULL, print the "Connecting to..." line, with
      PRINT being the host name we're connecting to.  */
   if (print)
     {
       const char *txt_addr = print_address (ip);
+
+      if (blocked || allowed_explicit)
+          logprintf (LOG_VERBOSE, _("%s address %s.\n"),
+                            blocked ? "Rejecting" : "Accepting", txt_addr, port);
+
       if (0 != strcmp (print, txt_addr))
         {
           char *str = NULL, *name;
@@ -293,6 +308,13 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
                logprintf (LOG_VERBOSE, _("Connecting to [%s]:%d... "), txt_addr, port);
 #endif
         }
+    }
+
+  /* Return error code if the IP was rejected. */
+  if (blocked)
+    {
+      errno = IP_REJECTED;
+      goto err;
     }
 
   /* Store the sockaddr info to SA.  */
@@ -363,7 +385,7 @@ connect_to_ip (const ip_address *ip, int port, const char *print)
     /* Protect errno from possible modifications by close and
        logprintf.  */
     int save_errno = errno;
-    if (sock >= 0)
+    if (sock >= 0 && !blocked)
       {
 #ifdef WIN32
 	/* If the connection timed out, fd_close will hang in Gnulib's

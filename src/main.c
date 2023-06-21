@@ -267,6 +267,7 @@ static struct cmdline_option option_data[] =
   {
     { "accept", 'A', OPT_VALUE, "accept", -1 },
     { "accept-regex", 0, OPT_VALUE, "acceptregex", -1 },
+    { "accept-subnets", 0, OPT_VALUE, "acceptsubnets", -1 },
     { "adjust-extension", 'E', OPT_BOOLEAN, "adjustextension", -1 },
     { "append-output", 'a', OPT__APPEND_OUTPUT, NULL, required_argument },
     { "ask-password", 0, OPT_BOOLEAN, "askpassword", -1 },
@@ -422,6 +423,8 @@ static struct cmdline_option option_data[] =
     { "regex-type", 0, OPT_VALUE, "regextype", -1 },
     { "reject", 'R', OPT_VALUE, "reject", -1 },
     { "reject-regex", 0, OPT_VALUE, "rejectregex", -1 },
+    { "reject-reserved-subnets", 0, OPT_BOOLEAN, "rejectreservedsubnets", -1 },
+    { "reject-subnets", 0, OPT_VALUE, "rejectsubnets", -1 },
     { "relative", 'L', OPT_BOOLEAN, "relativeonly", -1 },
     { "remote-encoding", 0, OPT_VALUE, "remoteencoding", -1 },
     { "remove-listing", 0, OPT_BOOLEAN, "removelisting", -1 },
@@ -721,6 +724,12 @@ Download:\n"),
     N_("\
        --resolvconf-file=FILE      resolv.conf FILE other than the default location\n"),
 #endif
+    N_("\
+       --accept-subnets=SUBNETS    list of subnets and IP to accept (comma separated)\n"),
+    N_("\
+       --reject-subnets=SUBNETS    list of subnets and IP to reject (comma separated)\n"),
+    N_("\
+       --reject-reserved-subnets   reject known reserved subnets according to RFC6890\n"),
     N_("\
        --dns-timeout=SECS          set the DNS lookup timeout to SECS\n"),
     N_("\
@@ -1093,6 +1102,8 @@ Recursive accept/reject:\n"),
     "\n",
     N_("Email bug reports, questions, discussions to <bug-wget@gnu.org>\n"
     "and/or open issues at https://savannah.gnu.org/bugs/?func=additem&group=wget.\n")
+    N_("For the additions in Wget-AT over Wget please open an issue at\n"
+    "https://github.com/ArchiveTeam/wget-lua.\n")
   };
 
   size_t i;
@@ -2136,6 +2147,23 @@ only if outputting to a regular file.\n"));
           exit (WGET_EXIT_GENERIC_ERROR);
         }
     }
+
+  if (opt.accept_subnets
+      && !init_user_subnets_list ("ACCEPT", opt.accept_subnets))
+    {
+      fprintf (stderr, _("Invalid entry in --accept-subnets.\n"));
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+
+  if (opt.reject_subnets
+      && !init_user_subnets_list ("REJECT", opt.reject_subnets))
+    {
+      fprintf (stderr, _("Invalid entry in --reject-subnets.\n"));
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+
+  if (opt.reject_reserved_subnets)
+    init_reserved_ips ();
 
 #ifdef HAVE_LIBCARES
   if (opt.bind_dns_address || opt.dns_servers || opt.host_lookups || opt.hosts_file || opt.resolvconf_file)

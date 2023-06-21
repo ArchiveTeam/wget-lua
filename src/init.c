@@ -136,6 +136,7 @@ static const struct {
   /* KEEP THIS LIST ALPHABETICALLY SORTED */
   { "accept",           &opt.accepts,           cmd_vector },
   { "acceptregex",      &opt.acceptregex_s,     cmd_string },
+  { "acceptsubnets",    &opt.accept_subnets,    cmd_vector },
   { "addhostdir",       &opt.add_hostdir,       cmd_boolean },
   { "adjustextension",  &opt.adjust_extension,  cmd_boolean },
   { "alwaysrest",       &opt.always_rest,       cmd_boolean }, /* deprecated */
@@ -316,6 +317,8 @@ static const struct {
   { "reject",           &opt.rejects,           cmd_vector },
   { "rejectedlog",      &opt.rejected_log,      cmd_file },
   { "rejectregex",      &opt.rejectregex_s,     cmd_string },
+  { "rejectreservedsubnets", &opt.reject_reserved_subnets, cmd_boolean },
+  { "rejectsubnets",    &opt.reject_subnets,    cmd_vector },
   { "relativeonly",     &opt.relative_only,     cmd_boolean },
   { "remoteencoding",   &opt.encoding_remote,   cmd_string },
   { "removelisting",    &opt.remove_listing,    cmd_boolean },
@@ -455,6 +458,8 @@ defaults (void)
   opt.dot_bytes = 1024;
   opt.dot_spacing = 10;
   opt.dots_in_line = 50;
+
+  opt.reject_reserved_subnets = false;
 
   opt.dns_cache = true;
   opt.ftp_pasv = true;
@@ -2030,6 +2035,8 @@ cleanup (void)
   xfree (opt.rejectregex);
   xfree (opt.acceptregex_s);
   xfree (opt.rejectregex_s);
+  free_vec (opt.accept_subnets);
+  free_vec (opt.reject_subnets);
   free_vec (opt.accepts);
   free_vec (opt.rejects);
   free_vec ((char **)opt.excludes);
