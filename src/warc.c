@@ -1919,6 +1919,7 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
 
   warc_uuid_str (revisit_uuid, sizeof (revisit_uuid));
 
+  rewind (body);
   sha1_stream (body, sha1_res_block);
   warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
 
@@ -1969,25 +1970,33 @@ bool
 warc_write_response_record (const char *url, const char *timestamp_str,
                             const char *concurrent_to_uuid, const ip_address *ip,
                             FILE *body, off_t payload_offset, const char *mime_type,
-                            int response_code, const char *redirect_location)
+                            int response_code, const char *redirect_location,
+                            char *sha1_payload)
 {
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
   char payload_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
-  char sha1_res_block[SHA1_DIGEST_SIZE];
-  char sha1_res_payload[SHA1_DIGEST_SIZE];
+  char sha1_res_block[SHA1_DIGEST_SIZE] = {0};
+  char sha1_res_payload[SHA1_DIGEST_SIZE] = {0};
   char response_uuid [48];
   const char *date;
   off_t offset;
   bool write_revisit;
   bool luahooks_revisit_malloc = false;
 
+  if (sha1_payload == NULL)
+    {
+      warc_write_ok = false;
+      return false;
+    }
+
+  strncpy(sha1_res_payload, sha1_payload, SHA1_DIGEST_SIZE);
+
   if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
       /* Calculate the block and payload digests. */
       rewind (body);
 
-      if (warc_sha1_stream_with_payload (body, sha1_res_block, sha1_res_payload,
-          payload_offset) == 0)
+      if (sha1_stream(body, sha1_res_block) == 0)
         {
           /* Decide (based on url + payload digest) if we have seen this
              data before. */
@@ -2065,6 +2074,17 @@ warc_write_response_record (const char *url, const char *timestamp_str,
           warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
           warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
         }
+      else
+        {
+          warc_write_ok = false;
+          return false;
+        }
+    }
+
+  if (sha1_res_block == NULL || sha1_res_payload == NULL)
+    {
+      warc_write_ok = false;
+      return false;
     }
 
   /* Not a revisit, just store the record. */

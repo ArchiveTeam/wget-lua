@@ -16,7 +16,8 @@ bool warc_write_request_record (const char *url, const char *timestamp_str,
   const char *concurrent_to_uuid, const ip_address *ip, FILE *body, off_t payload_offset);
 bool warc_write_response_record (const char *url, const char *timestamp_str,
   const char *concurrent_to_uuid, const ip_address *ip, FILE *body, off_t payload_offset,
-  const char *mime_type, int response_code, const char *redirect_location);
+  const char *mime_type, int response_code, const char *redirect_location,
+  char *sha1_payload);
 bool warc_write_resource_record (const char *resource_uuid, const char *url,
   const char *timestamp_str, const char *concurrent_to_uuid, const ip_address *ip,
   const char *content_type, FILE *body, off_t payload_offset);

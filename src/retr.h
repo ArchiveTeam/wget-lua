@@ -53,7 +53,8 @@ enum {
   rb_compressed_gzip = 8
 };
 
-int fd_read_body (const char *, int, FILE *, wgint, wgint, wgint *, wgint *, double *, int, FILE *);
+int fd_read_body (const char *, int, FILE *, wgint, wgint, wgint *, wgint *,
+                  double *, int, FILE *, char *);
 
 typedef const char *(*hunk_terminator_t) (const char *, const char *, int);
 

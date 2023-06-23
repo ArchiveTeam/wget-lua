@@ -36,6 +36,7 @@ as that of the covered work.  */
 #include <errno.h>
 #include <string.h>
 #include <assert.h>
+#include <sha1.h>
 #ifdef VMS
 # include <unixio.h>            /* For delete(). */
 #endif
@@ -166,7 +167,7 @@ limit_bandwidth (wgint bytes, struct ptimer *timer)
 
 static int
 write_data (FILE *out, FILE *out2, const char *buf, int bufsize,
-            wgint *skip, wgint *written)
+            wgint *skip, wgint *written, struct sha1_ctx *ctx)
 {
   if (out == NULL && out2 == NULL)
     return 1;
@@ -187,6 +188,9 @@ write_data (FILE *out, FILE *out2, const char *buf, int bufsize,
             return 1;
         }
     }
+
+  if (ctx)
+    sha1_process_bytes (buf, bufsize, ctx);
 
   if (out)
     fwrite (buf, 1, bufsize, out);
@@ -253,13 +257,14 @@ int
 fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, wgint startpos,
 
               wgint *qtyread, wgint *qtywritten, double *elapsed, int flags,
-              FILE *out2)
+              FILE *out2, char *sha1)
 {
   int ret = 0;
 #undef max
 #define max(a,b) ((a) > (b) ? (a) : (b))
   int dlbufsize = max (BUFSIZ, 8 * 1024);
   char *dlbuf = xmalloc (dlbufsize);
+
 
   struct ptimer *timer = NULL;
   double last_successful_read_tm = 0;
@@ -283,6 +288,9 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
   wgint sum_read = 0;
   wgint sum_written = 0;
   wgint remaining_chunk_size = 0;
+
+  struct sha1_ctx ctx_payload;
+  sha1_init_ctx (&ctx_payload);
 
 #ifdef HAVE_LIBZ
   /* try to minimize the number of calls to inflate() and write_data() per
@@ -465,7 +473,8 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
               int towrite;
 
               /* Write original data to WARC file */
-              write_res = write_data (NULL, out2, dlbuf, ret, NULL, NULL);
+              write_res = write_data (NULL, out2, dlbuf, ret, NULL, NULL,
+                                      &ctx_payload);
               if (write_res < 0)
                 {
                   ret = write_res;
@@ -503,7 +512,7 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
 
                   towrite = gzbufsize - gzstream.avail_out;
                   write_res = write_data (out, NULL, gzbuf, towrite, &skip,
-                                          &sum_written);
+                                          &sum_written, NULL);
                   if (write_res < 0)
                     {
                       ret = write_res;
@@ -516,7 +525,7 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
 #endif
             {
               write_res = write_data (out, out2, dlbuf, ret, &skip,
-                                      &sum_written);
+                                      &sum_written, &ctx_payload);
               if (write_res < 0)
                 {
                   ret = write_res;
@@ -594,6 +603,9 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
         }
     }
 #endif
+
+  if (sha1 != NULL)
+    sha1_finish_ctx (&ctx_payload, sha1);
 
   if (qtyread)
     *qtyread += sum_read;

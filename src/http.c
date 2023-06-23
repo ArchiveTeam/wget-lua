@@ -39,6 +39,7 @@ as that of the covered work.  */
 #include <time.h>
 #include <locale.h>
 #include <fcntl.h>
+#include <sha1.h>
 
 #include "hash.h"
 #include "http.h"
@@ -1637,6 +1638,7 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   int flags = 0;
   bool write_to_warc = true;
   char *url = u->url;
+  char sha1_no_transfer_encoding[SHA1_DIGEST_SIZE];
 
   if (opt.warc_filename != NULL)
     {
@@ -1695,7 +1697,7 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
      response body to warc_tmp.  */
   hs->res = fd_read_body (hs->local_file, sock, fp, contlen != -1 ? contlen : 0,
                           hs->restval, &hs->rd_size, &hs->len, &hs->dltime,
-                          flags, warc_tmp);
+                          flags, warc_tmp, sha1_no_transfer_encoding);
 
   write_to_warc = luahooks_write_to_warc (u, hs);
 
@@ -1710,7 +1712,8 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
           bool r = warc_write_response_record (url, warc_timestamp_str,
                                                warc_request_uuid, warc_ip,
                                                warc_tmp, warc_payload_offset,
-                                               type, statcode, hs->newloc);
+                                               type, statcode, hs->newloc,
+                                               sha1_no_transfer_encoding);
 
           /* warc_write_response_record has closed warc_tmp. */
 
@@ -3596,9 +3599,21 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
     }
 
   chunked_transfer_encoding = false;
-  if (resp_header_copy (resp, "Transfer-Encoding", hdrval, sizeof (hdrval))
-      && 0 == c_strcasecmp (hdrval, "chunked"))
-    chunked_transfer_encoding = true;
+  if (resp_header_copy (resp, "Transfer-Encoding", hdrval, sizeof (hdrval)))
+    {
+      if (0 == c_strcasecmp (hdrval, "chunked"))
+        chunked_transfer_encoding = true;
+      else if (warc_enabled)
+        {
+          /* If WARC is enabled with a Transfer-Encoding response header with a
+             different value than 'chunked', we throw an error since we do not
+             have support to strip this. We need to be able to strip
+             Transfer-Encoding to calculate the WARC-Payload-Digest value. */
+          CLOSE_INVALIDATE (sock);
+          retval = INVALID_ENCODING;
+          goto cleanup;
+        }
+    }
 
   /* Handle (possibly multiple instances of) the Set-Cookie header. */
   if (opt.cookies)
