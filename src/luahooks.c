@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include <lua.h>
 #include <lauxlib.h>
@@ -22,6 +23,7 @@
     lua_push ## TYPE (lua, VALUE); \
     lua_setfield (lua, -2, KEY);
 
+#define DEBUG_TRACEBACK_INDEX 1
 
 static lua_State *lua;
 
@@ -182,13 +184,20 @@ luahooks_init ()
 
   lua_setglobal (lua, "wget");
 
-  int res = luaL_dofile (lua, opt.lua_filename);
+  lua_getfield (lua, LUA_GLOBALSINDEX, "debug");
+  assert (lua_istable(lua, -1));
+  lua_getfield (lua, -1, "traceback");
+  assert (lua_isfunction (lua, -1));
+  lua_remove(lua, -2);
+
+  int res = luaL_loadfile (lua, opt.lua_filename);
+  res |= lua_pcall (lua, 0, LUA_MULTRET, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     handle_lua_error (res);
 
   if (luahooks_function_lookup ("callbacks", "init"))
     {
-      int res = lua_pcall (lua, 0, 0, 0);
+      int res = lua_pcall (lua, 0, 0, DEBUG_TRACEBACK_INDEX);
       if (res != 0)
         handle_lua_error (res);
     }
@@ -484,7 +493,7 @@ luahooks_lookup_host (const char *host)
 
   lua_pushstring (lua, host);
 
-  int res = lua_pcall (lua, 1, 1, 0);
+  int res = lua_pcall (lua, 1, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -518,7 +527,7 @@ luahooks_httploop_result (const struct url *url, const uerr_t err, const struct 
   lua_pushstring (lua, uerr_to_string (err));
   http_stat_to_lua_table (hstat);
 
-  int res = lua_pcall (lua, 3, 1, 0);
+  int res = lua_pcall (lua, 3, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -542,7 +551,7 @@ luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
   url_to_lua_table (url);
   http_stat_to_lua_table (hstat);
 
-  int res = lua_pcall (lua, 2, 1, 0);
+  int res = lua_pcall (lua, 2, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -564,7 +573,7 @@ struct luahooks_revisit *luahooks_dedup_response (const char *url, char *digest)
   lua_pushstring (lua, url);
   lua_pushstring (lua, digest);
 
-  int res = lua_pcall (lua, 2, 1, 0);
+  int res = lua_pcall (lua, 2, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -634,7 +643,7 @@ luahooks_download_child (const struct urlpos *upos, struct url *parent, int dept
   lua_pushboolean (lua, verdict);
   lua_pushstring (lua, reason_string);
 
-  int res = lua_pcall (lua, 7, 1, 0);
+  int res = lua_pcall (lua, 7, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -669,7 +678,7 @@ luahooks_get_urls (const char *file, const char *url, bool is_css,
   lua_pushboolean (lua, is_css);
   iri_to_lua_table (iri);
 
-  int res = lua_pcall (lua, 4, 1, 0);
+  int res = lua_pcall (lua, 4, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -793,7 +802,7 @@ luahooks_finish (double start_time, double end_time,
   lua_pushnumber (lua, total_downloaded_bytes);
   lua_pushnumber (lua, total_download_time);
 
-  int res = lua_pcall (lua, 6, 0, 0);
+  int res = lua_pcall (lua, 6, 0, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
@@ -809,7 +818,7 @@ luahooks_before_exit (int exit_status)
   lua_pushinteger (lua, exit_status);
   lua_pushstring (lua, exit_status_to_string (exit_status));
 
-  int res = lua_pcall (lua, 2, 1, 0);
+  int res = lua_pcall (lua, 2, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     {
       handle_lua_error (res);
