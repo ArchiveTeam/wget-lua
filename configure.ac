@@ -997,28 +997,59 @@ test "X${ENABLE_XATTR}" = "Xyes" && AC_DEFINE([ENABLE_XATTR], 1,
     [Define if you want file meta-data storing into POSIX Extended Attributes compiled in.])
 
 dnl
-dnl Check for Lua
+dnl Check for Lua / LuaJIT
 dnl
 
-AC_CHECK_HEADER(lua.h,
-                AC_CHECK_LIB(lua, lua_newstate,
-                  [LIBS="${LIBS} -lm -ldl -llua"
-                   AC_DEFINE([ENABLE_LUA], 1,
-                             [Define if Lua is available.])
-                  ], [
-                   AC_MSG_ERROR([lua not found])
-                  ], -lm),
-                AC_CHECK_HEADER(lua5.1/lua.h,
-                  AC_CHECK_LIB(lua5.1, lua_newstate,
-                    [LIBS="${LIBS} -lm -ldl -llua5.1"
-                     CPPFLAGS="${CPPFLAGS} -I/usr/include/lua5.1"
-                     AC_DEFINE([ENABLE_LUA], 1,
-                               [Define if Lua is available.])
-                    ], [
-                     AC_MSG_ERROR([lua not found])
-                    ], -lm),
-                  AC_MSG_ERROR([lua not found])
-                )
+AC_ARG_ENABLE(luajit, AS_HELP_STRING([--disable-luajit],[Disable LuaJIT compiler for Lua]))
+
+AS_IF(
+  [test "X$enable_luajit" != "Xno"],
+  [
+    enable_luajit=no
+    AC_CHECK_HEADER(
+      luajit-2.1/lua.h,
+      AC_CHECK_LIB(
+        luajit-5.1,
+        luaL_newstate,
+        [
+          LIBS="${LIBS} -lm -ldl -lluajit-5.1"
+          CPPFLAGS="${CPPFLAGS} -I/usr/include/luajit-2.1"
+          AC_DEFINE([ENABLE_LUA], 1, [Define if Lua is available.])
+          enable_luajit=yes
+        ],
+        -lm
+      )
+    )
+  ]
+)
+
+AS_IF(
+  [test "X$enable_luajit" != "Xyes"],
+  [
+    AC_CHECK_HEADER(
+      lua5.1/lua.h,
+      AC_CHECK_LIB(
+        lua5.1,
+        lua_newstate,
+        [
+          LIBS="${LIBS} -lm -ldl -llua5.1"
+          CPPFLAGS="${CPPFLAGS} -I/usr/include/lua5.1"
+          AC_DEFINE([ENABLE_LUA], 1, [Define if Lua is available.])
+        ],
+        [
+          AC_MSG_ERROR([lua not found])
+        ],
+        -lm
+      ),
+      AC_MSG_ERROR([lua not found])
+    )
+  ]
+)
+
+AS_IF(
+  [test "X$enable_luajit" = Xyes],
+  [LUA_INFO="yes, via libluajit-5.1"],
+  [LUA_INFO="yes, via liblua5.1"]
 )
  
 dnl Needed by src/Makefile.am
@@ -1053,6 +1084,7 @@ AC_MSG_NOTICE([Summary of build options:
   SSL:               $with_ssl
   Zlib:              $with_zlib
   Zstandard:         $with_zstandard
+  Lua:               $LUA_INFO
   PSL:               $with_libpsl
   PCRE:              $PCRE_INFO
   Digest:            $ENABLE_DIGEST
