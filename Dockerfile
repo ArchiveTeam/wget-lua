@@ -22,7 +22,7 @@ RUN ldconfig
 COPY . /tmp/wget
 RUN cd /tmp/wget \
  && ./bootstrap \
- && ./bootstrap && ./configure --with-ssl=openssl --with-cares --disable-nls \
+ && ./configure --with-ssl="${TLSTYPE}" --with-cares --disable-nls \
  && make -j $(nproc) \
  && src/wget --help | grep -iE "gnu|warc|lua|dns|host|resolv"
 FROM scratch
