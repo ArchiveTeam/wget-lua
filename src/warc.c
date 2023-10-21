@@ -1886,7 +1886,7 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
                timestamp_str_cdx, url, mime_type, response_code, checksum,
                tmp_location, offset_string, warc_current_filename,
                response_uuid) < 0
-      || fflush (warc_current_cdx_file) != 0);
+      || fflush (warc_current_cdx_file) != 0)
     warc_write_ok = false;
 
   xfree (tmp_location);
