@@ -306,7 +306,10 @@ ssl_init (void)
 
 #if !defined(LIBRESSL_VERSION_NUMBER) && (OPENSSL_VERSION_NUMBER >= 0x10100000L)
   if (ssl_proto_version)
-    SSL_CTX_set_min_proto_version(ssl_ctx, ssl_proto_version);
+    {
+      SSL_CTX_set_min_proto_version(ssl_ctx, ssl_proto_version);
+      SSL_CTX_set_max_proto_version(ssl_ctx, ssl_proto_version);
+    }
 #endif
 
   /* OpenSSL ciphers: https://www.openssl.org/docs/apps/ciphers.html
@@ -781,6 +784,51 @@ _sni_hostname(const char *hostname)
     sni_hostname[len] = 0;
 
   return sni_hostname;
+}
+
+/* Get the RFC cipher suite name used for file descriptor FD, which is
+   assumed to already have been connected with `ssl_context_wget`. */
+
+const char *
+ssl_get_cipher_name (int fd)
+{
+  const SSL_CIPHER *cipher;
+  const char *cipher_name;
+
+  struct openssl_transport_context *ctx = fd_transport_context (fd);
+
+  cipher = SSL_get_current_cipher (ctx->conn);
+  cipher_name = SSL_CIPHER_standard_name (cipher);
+
+  if (cipher_name  == NULL || strcmp(cipher_name, "(NONE)") == 0)
+    abort ();
+
+  return cipher_name;
+}
+
+/* Get the protocol used for file descriptor FD */
+
+enum secure_protocol
+ssl_get_protocol (int fd)
+{
+  struct openssl_transport_context *ctx = fd_transport_context (fd);
+
+  const char *version = SSL_get_cipher_version (ctx->conn);
+
+  if (strcmp (version, "SSLv2") == 0)
+    return secure_protocol_sslv2;
+  else if (strcmp (version, "SSLv3") == 0)
+    return secure_protocol_sslv3;
+  else if (strcmp (version, "TLSv1") == 0)
+    return secure_protocol_tlsv1;
+  else if (strcmp (version, "TLSv1.1") == 0)
+    return secure_protocol_tlsv1_1;
+  else if (strcmp (version, "TLSv1.2") == 0)
+    return secure_protocol_tlsv1_2;
+  else if (strcmp (version, "TLSv1.3") == 0)
+    return secure_protocol_tlsv1_3;
+  else
+    abort ();
 }
 
 /* Perform the SSL handshake on file descriptor FD, which is assumed

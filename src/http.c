@@ -97,6 +97,9 @@ static struct cookie_jar *wget_cookie_jar;
 #define TEXTXHTML_S "application/xhtml+xml"
 #define TEXTCSS_S "text/css"
 
+/* Lowercased request HTTP protocol. */
+#define REQUEST_PROTOCOL "http/1.0"
+
 /* Some status code validation macros: */
 #define H_10X(x)        (((x) >= 100) && ((x) < 200))
 #define H_20X(x)        (((x) >= 200) && ((x) < 300))
@@ -362,7 +365,10 @@ request_send (const struct request *req, int fd, FILE *warc_tmp)
 
   APPEND (p, req->method); *p++ = ' ';
   APPEND (p, req->arg);    *p++ = ' ';
-  memcpy (p, "HTTP/1.1\r\n", 10); p += 10;
+  char *request_protocol = xstrdup_upper (REQUEST_PROTOCOL);
+  APPEND (p, request_protocol);
+  xfree (request_protocol);
+  *p++ = '\r', *p++ = '\n';
 
   for (i = 0; i < req->hcount; i++)
     {
@@ -790,16 +796,20 @@ resp_header_strdup (const struct response *resp, const char *name)
    returned in *MESSAGE.  */
 
 static int
-resp_status (const struct response *resp, char **message)
+resp_status (const struct response *resp, char **message, const char **http_protocol)
 {
   int status;
-  const char *p, *end;
+  double http_version;
+  char http_version_s[5];
+  const char *p, *end, *http_p;
 
   if (!resp->headers)
     {
       /* For a HTTP/0.9 response, assume status 200. */
       if (message)
         *message = xstrdup (_("No headers, assuming HTTP/0.9"));
+      if (http_protocol)
+        *http_protocol = "http/0.9";
       return 200;
     }
 
@@ -813,18 +823,39 @@ resp_status (const struct response *resp, char **message)
   if (end - p < 4 || 0 != strncmp (p, "HTTP", 4))
     return -1;
   p += 4;
+  http_p = p;
 
   /* Match the HTTP version.  This is optional because Gnutella
      servers have been reported to not specify HTTP version.  */
   if (p < end && *p == '/')
     {
       ++p;
+      http_p = p;
       while (p < end && c_isdigit (*p))
         ++p;
       if (p < end && *p == '.')
         ++p;
       while (p < end && c_isdigit (*p))
         ++p;
+    }
+
+  if (http_protocol)
+    {
+      if (http_p == p)
+        *http_protocol = "http/1.0";
+      else
+        {
+          http_version = strtod (strdupdelim (http_p, p), NULL);
+          snprintf(http_version_s, 5, "%.2f", http_version);
+          if (strcmp (http_version_s, "0.90") == 0)
+             *http_protocol = "http/0.9";
+          else if (strcmp (http_version_s, "1.00") == 0)
+             *http_protocol = "http/1.0";
+          else if (strcmp (http_version_s, "1.10") == 0)
+             *http_protocol = "http/1.1";
+          else
+            return -1;
+        }
     }
 
   while (p < end && c_isspace (*p))
@@ -1630,7 +1661,8 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
                     wgint contrange, bool chunked_transfer_encoding,
                     const struct url *u, char *warc_timestamp_str,
                     char *warc_request_uuid, ip_address *warc_ip, char *type,
-                    int statcode, char *head)
+                    int statcode, char *head, const char **warc_protocol,
+                    const char *warc_cipher_name)
 {
   int warc_payload_offset = 0;
   FILE *warc_tmp = NULL;
@@ -1709,11 +1741,15 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
              Note: per the WARC standard, the request and response should share
              the same date header.  We re-use the timestamp of the request.
              The response record should also refer to the uuid of the request.  */
-          bool r = warc_write_response_record (url, warc_timestamp_str,
+          char *warc_url = url_string (u, URL_AUTH_SHOW);
+          bool r = warc_write_response_record (warc_url, warc_timestamp_str,
                                                warc_request_uuid, warc_ip,
                                                warc_tmp, warc_payload_offset,
                                                type, statcode, hs->newloc,
-                                               sha1_no_transfer_encoding);
+                                               sha1_no_transfer_encoding,
+                                               warc_protocol,
+                                               warc_cipher_name);
+          xfree (warc_url);
 
           /* warc_write_response_record has closed warc_tmp. */
 
@@ -2143,7 +2179,7 @@ establish_connection (const struct url *u, const struct url **conn_ref,
           DEBUGP (("proxy responded with: [%s]\n", head));
 
           resp = resp_new (head);
-          statcode = resp_status (resp, &message);
+          statcode = resp_status (resp, &message, NULL);
           if (statcode < 0)
             {
               char *tms = datetime_str (time (NULL));
@@ -3187,6 +3223,8 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
   struct response *resp = NULL;
   char hdrval[512];
   char *message = NULL;
+  const char *http_protocol = NULL;
+  const char *warc_protocol[3] = {NULL};
 
   /* Declare WARC variables. */
   bool warc_enabled = (opt.warc_filename != NULL);
@@ -3209,6 +3247,11 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
   /* Headers sent when using POST. */
   wgint body_data_size = 0;
+
+#ifdef HAVE_SSL
+  const char *warc_cipher_name = NULL;
+  enum secure_protocol protocol;
+#endif
 
 #ifdef HAVE_SSL
   if (u->scheme == SCHEME_HTTPS)
@@ -3300,6 +3343,22 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       }
   }
 
+#ifdef HAVE_SSL
+  if (conn->scheme == SCHEME_HTTPS)
+    {
+      warc_cipher_name = ssl_get_cipher_name (sock);
+      protocol = ssl_get_protocol (sock);
+    }
+#endif
+
+  warc_protocol[0] = REQUEST_PROTOCOL;
+#ifdef HAVE_SSL
+  if (conn->scheme == SCHEME_HTTPS)
+    warc_protocol[1] = warc_protocol_to_string (protocol);
+  else
+    warc_protocol[1] = NULL;
+#endif
+
   /* Open the temporary file where we will write the request. */
   if (warc_enabled)
     {
@@ -3373,15 +3432,25 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
   if (warc_enabled)
     {
       bool warc_result;
+      char *warc_url;
 
       /* Generate a timestamp and uuid for this request. */
       warc_timestamp (warc_timestamp_str, sizeof (warc_timestamp_str));
       warc_uuid_str (warc_request_uuid, sizeof (warc_request_uuid));
 
       /* Create a request record and store it in the WARC file. */
-      warc_result = warc_write_request_record (u->url, warc_timestamp_str,
+      warc_url = url_string (u, URL_AUTH_SHOW);
+      warc_result = warc_write_request_record (warc_url, warc_timestamp_str,
                                                warc_request_uuid, warc_ip,
-                                               warc_tmp, warc_payload_offset);
+                                               warc_tmp, warc_payload_offset,
+                                               warc_protocol,
+#ifdef HAVE_SSL
+                                               warc_cipher_name
+#else
+                                               NULL
+#endif
+                                               );
+      xfree (warc_url);
       if (! warc_result)
         {
           CLOSE_INVALIDATE (sock);
@@ -3422,7 +3491,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
         /* Check for status line.  */
         xfree (message);
-        statcode = resp_status (resp, &message);
+        statcode = resp_status (resp, &message, &http_protocol);
         if (statcode < 0)
           {
             char *tms = datetime_str (time (NULL));
@@ -3449,6 +3518,14 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
       }
     while (_repeat);
   }
+
+  warc_protocol[0] = http_protocol;
+#ifdef HAVE_SSL
+  if (conn->scheme == SCHEME_HTTPS)
+    warc_protocol[1] = warc_protocol_to_string (protocol);
+  else
+    warc_protocol[1] = NULL;
+#endif
 
   xfree (hs->message);
   hs->message = xstrdup (message);
@@ -3682,7 +3759,13 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
                                     chunked_transfer_encoding,
                                     u, warc_timestamp_str,
                                     warc_request_uuid, warc_ip, type,
-                                    statcode, head);
+                                    statcode, head, warc_protocol,
+#ifdef HAVE_SSL
+                                    warc_cipher_name
+#else
+                                    NULL
+#endif
+                                    );
           xfree (type);
 
           if (_err != RETRFINISHED || hs->res < 0)
@@ -3858,7 +3941,13 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
                                                 chunked_transfer_encoding,
                                                 u, warc_timestamp_str,
                                                 warc_request_uuid, warc_ip, type,
-                                                statcode, head);
+                                                statcode, head, warc_protocol,
+#ifdef HAVE_SSL
+                                                warc_cipher_name
+#else
+                                                NULL
+#endif
+                                                );
 
                   if (_err != RETRFINISHED || hs->res < 0)
                     {
@@ -4111,7 +4200,13 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
                                         chunked_transfer_encoding,
                                         u, warc_timestamp_str,
                                         warc_request_uuid, warc_ip, type,
-                                        statcode, head);
+                                        statcode, head, warc_protocol,
+#ifdef HAVE_SSL
+                                        warc_cipher_name
+#else
+                                        NULL
+#endif
+                                        );
 
           if (_err != RETRFINISHED || hs->res < 0)
             {
@@ -4189,7 +4284,13 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
                             chunked_transfer_encoding,
                             u, warc_timestamp_str,
                             warc_request_uuid, warc_ip, type,
-                            statcode, head);
+                            statcode, head, warc_protocol,
+#ifdef HAVE_SSL
+                            warc_cipher_name
+#else
+                            NULL
+#endif
+                            );
 
   if (hs->res >= 0)
     CLOSE_FINISH (sock);

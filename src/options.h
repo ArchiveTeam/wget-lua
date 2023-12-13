@@ -243,7 +243,7 @@ struct options
   char *bind_address;           /* What local IP address to bind to. */
 
 #ifdef HAVE_SSL
-  enum {
+  enum secure_protocol {
     secure_protocol_auto,
     secure_protocol_sslv2,
     secure_protocol_sslv3,

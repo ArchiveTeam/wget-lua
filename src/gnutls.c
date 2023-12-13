@@ -753,20 +753,23 @@ set_prio_default (gnutls_session_t session)
       break;
 
     case secure_protocol_sslv2:
+      logprintf (LOG_NOTQUIET, _("GnuTLS does not support SSLv2.\n"));
+      return -1;
+
     case secure_protocol_sslv3:
       err = gnutls_priority_set_direct (session, "NORMAL:-VERS-TLS-ALL:+VERS-SSL3.0", NULL);
       break;
 
     case secure_protocol_tlsv1:
-      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0", NULL);
+      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.1:-VERS-TLS1.2:-VERS-TLS1.3", NULL);
       break;
 
     case secure_protocol_tlsv1_1:
-      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0", NULL);
+      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.2:-VERS-TLS1.3", NULL);
       break;
 
     case secure_protocol_tlsv1_2:
-      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1", NULL);
+      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1:-VERS-TLS1.3", NULL);
       break;
 
     case secure_protocol_tlsv1_3:
@@ -800,6 +803,9 @@ set_prio_default (gnutls_session_t session)
       break;
 
     case secure_protocol_sslv2:
+      logprintf (LOG_NOTQUIET, _("GnuTLS does not support SSLv2.\n"));
+      return -1;
+
     case secure_protocol_sslv3:
       allowed_protocols[0] = GNUTLS_SSL3;
       err = gnutls_protocol_set_priority (session, allowed_protocols);
@@ -807,28 +813,16 @@ set_prio_default (gnutls_session_t session)
 
     case secure_protocol_tlsv1:
       allowed_protocols[0] = GNUTLS_TLS1_0;
-      allowed_protocols[1] = GNUTLS_TLS1_1;
-      allowed_protocols[2] = GNUTLS_TLS1_2;
-#if GNUTLS_VERSION_NUMBER >= 0x030603
-      allowed_protocols[3] = GNUTLS_TLS1_3;
-#endif
       err = gnutls_protocol_set_priority (session, allowed_protocols);
       break;
 
     case secure_protocol_tlsv1_1:
       allowed_protocols[0] = GNUTLS_TLS1_1;
-      allowed_protocols[1] = GNUTLS_TLS1_2;
-#if GNUTLS_VERSION_NUMBER >= 0x030603
-      allowed_protocols[2] = GNUTLS_TLS1_3;
-#endif
       err = gnutls_protocol_set_priority (session, allowed_protocols);
       break;
 
     case secure_protocol_tlsv1_2:
       allowed_protocols[0] = GNUTLS_TLS1_2;
-#if GNUTLS_VERSION_NUMBER >= 0x030603
-      allowed_protocols[1] = GNUTLS_TLS1_3;
-#endif
       err = gnutls_protocol_set_priority (session, allowed_protocols);
       break;
 
@@ -850,6 +844,47 @@ set_prio_default (gnutls_session_t session)
 #endif
 
   return err;
+}
+
+const char *
+ssl_get_cipher_name (int fd)
+{
+  const char *cipher_name;
+
+  struct wgnutls_transport_context *ctx = fd_transport_context (fd);
+
+  cipher_name = gnutls_ciphersuite_get (ctx->session);
+
+  /* `gnutls_ciphersuite_get` returns the IANA cipher suite name, except
+     in one case, which is aborted on below. */
+  if (cipher_name == NULL || strcmp (cipher_name, "TLS_DHE_DSS_RC4_128_SHA") == 0)
+    abort ();
+
+  return cipher_name;
+}
+
+enum secure_protocol
+ssl_get_protocol (int fd)
+{
+  struct wgnutls_transport_context *ctx = fd_transport_context (fd);
+
+  gnutls_protocol_t protocol = gnutls_protocol_get_version (ctx->session);
+
+  switch (protocol)
+    {
+      case GNUTLS_SSL3:
+        return secure_protocol_sslv3;
+      case GNUTLS_TLS1:
+        return secure_protocol_tlsv1;
+      case GNUTLS_TLS1_1:
+        return secure_protocol_tlsv1_1;
+      case GNUTLS_TLS1_2:
+        return secure_protocol_tlsv1_2;
+      case GNUTLS_TLS1_3:
+        return secure_protocol_tlsv1_3;
+      default:
+        abort ();
+    }
 }
 
 bool

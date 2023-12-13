@@ -2068,7 +2068,7 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
           bool warc_res;
 
           warc_res = warc_write_resource_record (NULL, u->url, NULL, NULL,
-                                                  warc_ip, NULL, warc_tmp, -1);
+                                                  warc_ip, NULL, warc_tmp, -1, NULL, NULL);
 
           if (! warc_res)
             return WARC_ERR;

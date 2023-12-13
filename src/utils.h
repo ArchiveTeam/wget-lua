@@ -67,6 +67,7 @@ char *time_str (time_t);
 char *datetime_str (time_t);
 
 char *xstrdup_lower (const char *);
+char *xstrdup_upper (const char *);
 
 char *strdupdelim (const char *, const char *);
 char **sepstring (const char *);

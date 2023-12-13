@@ -214,7 +214,7 @@ unsigned char char_prop[ 256] = {
     0,  0,  0,  0,  0,  0,  0,  0,   0,  0,  0,  0,  0,  0,  0,  8
 };
 
-/* Utility function: like xstrdup(), but also lowercases S.  */
+/* Utility function: like xstrdup(), but also lowercases or uppercases S.  */
 
 char *
 xstrdup_lower (const char *s)
@@ -223,6 +223,16 @@ xstrdup_lower (const char *s)
   char *p = copy;
   for (; *p; p++)
     *p = c_tolower (*p);
+  return copy;
+}
+
+char *
+xstrdup_upper (const char *s)
+{
+  char *copy = xstrdup (s);
+  char *p = copy;
+  for (; *p; p++)
+    *p = c_toupper (*p);
   return copy;
 }
 

@@ -36,5 +36,7 @@ bool ssl_init (void);
 void ssl_cleanup (void);
 bool ssl_connect_wget (int, const char *, int *);
 bool ssl_check_certificate (int, const char *);
+const char *ssl_get_cipher_name (int);
+enum secure_protocol ssl_get_protocol (int);
 
 #endif /* GEN_SSLFUNC_H */

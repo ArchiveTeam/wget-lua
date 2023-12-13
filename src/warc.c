@@ -778,6 +778,30 @@ warc_base32_sha1_digest (const char *sha1_digest, char *sha1_base32, size_t sha1
   return sha1_base32;
 }
 
+#ifdef HAVE_SSL
+/* Converts a protocol to string used in the WARC protocol header. */
+const char *
+warc_protocol_to_string (enum secure_protocol protocol)
+{
+  switch (protocol)
+    {
+    case secure_protocol_sslv2:
+      return "ssl/2";
+    case secure_protocol_sslv3:
+      return "ssl/3";
+    case secure_protocol_tlsv1:
+      return "tls/1.0";
+    case secure_protocol_tlsv1_1:
+      return "tls/1.1";
+    case secure_protocol_tlsv1_2:
+      return "tls/1.2";
+    case secure_protocol_tlsv1_3:
+      return "tls/1.3";
+    default:
+      abort ();
+    }
+}
+#endif
 
 /* Sets the digest headers of the record.
    This method will calculate the block digest and, if payload_offset >= 0,
@@ -1678,7 +1702,7 @@ warc_write_metadata (void)
   warc_write_metadata_record (manifest_uuid,
                               "metadata://gnu.org/software/wget/warc/MANIFEST.txt",
                               NULL, NULL, NULL, "text/plain",
-                              warc_manifest_fp, -1);
+                              warc_manifest_fp, -1, NULL, NULL);
   /* warc_write_resource_record has closed warc_manifest_fp. */
 
   warc_tmp_fp = warc_tempfile ();
@@ -1698,7 +1722,7 @@ warc_write_metadata (void)
   warc_write_resource_record (NULL,
                    "metadata://gnu.org/software/wget/warc/wget_arguments.txt",
                               NULL, manifest_uuid, NULL, "text/plain",
-                              warc_tmp_fp, -1);
+                              warc_tmp_fp, -1, NULL, NULL);
   /* warc_write_resource_record has closed warc_tmp_fp. */
 
   if (warc_log_fp != NULL)
@@ -1706,7 +1730,7 @@ warc_write_metadata (void)
       warc_write_resource_record (NULL,
                               "metadata://gnu.org/software/wget/warc/wget.log",
                                   NULL, manifest_uuid, NULL, "text/plain",
-                                  warc_log_fp, -1);
+                                  warc_log_fp, -1, NULL, NULL);
       /* warc_write_resource_record has closed warc_log_fp. */
 
       warc_log_fp = NULL;
@@ -1799,6 +1823,46 @@ warc_tempfile (void)
 #endif /* def __VMS [else] */
 }
 
+/* Writes one or more protocols. If one of the protocol is of ssl/* or tls/*,
+   a cipher suitename should be provided too, else an writing fails. If a
+   cipher suite name is given, protocol should contain one of ssl/* or tls/*.
+   Some combinations of protocol are not allowed.
+   protocol  is one or more protocol names,
+   cipher_name  is the name of the cipher suite if used. */
+int
+warc_write_protocol (const char **protocol, const char *cipher_name)
+{
+  int i;
+#ifdef HAVE_SSL
+  bool found_tls = false;
+#endif
+
+  if (protocol != NULL)
+    {
+      for (i = 0; protocol[i]; i++)
+        {
+          warc_write_header ("WARC-Protocol", protocol[i]);
+#ifdef HAVE_SSL
+          if (strncmp (protocol[i], "ssl", 3) == 0
+              || strncmp (protocol[i], "tls", 3) == 0)
+            {
+              if (found_tls)
+                return false;
+              found_tls = true;
+            }
+#endif
+        }
+    }
+
+#ifdef HAVE_SSL
+  if (cipher_name != NULL)
+    warc_write_header ("WARC-Cipher-Suite", cipher_name);
+  else if (found_tls)
+    return false;
+#endif
+
+  return true;
+}
 
 /* Writes a request record to the WARC file.
    url  is the target uri of the request,
@@ -1811,7 +1875,8 @@ warc_tempfile (void)
 bool
 warc_write_request_record (const char *url, const char *timestamp_str,
                            const char *record_uuid, const ip_address *ip,
-                           FILE *body, off_t payload_offset)
+                           FILE *body, off_t payload_offset, const char **protocol,
+                           const char *cipher_name)
 {
   warc_write_start_record ();
   warc_write_header ("WARC-Type", "request");
@@ -1821,6 +1886,8 @@ warc_write_request_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", record_uuid);
   warc_write_ip_header (ip);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
+  if (!warc_write_protocol (protocol, cipher_name))
+    warc_write_ok = false;
   if (opt.warc_item_name != NULL)
     warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
   warc_write_digest_headers (body, payload_offset);
@@ -1911,7 +1978,8 @@ static bool
 warc_write_revisit_record (const char *url, const char *timestamp_str,
                            const char *concurrent_to_uuid, const char *payload_digest,
                            const char *refers_to, const char *refers_to_target_uri,
-                           const char *refers_to_date, const ip_address *ip, FILE *body)
+                           const char *refers_to_date, const ip_address *ip, FILE *body,
+                           const char **protocol, const char *cipher_name)
 {
   char revisit_uuid [48];
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
@@ -1928,6 +1996,8 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", revisit_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
+  if (!warc_write_protocol (protocol, cipher_name))
+    warc_write_ok = false;
   if (refers_to != NULL)
     warc_write_header ("WARC-Refers-To", refers_to);
   if (refers_to_target_uri != NULL)
@@ -1971,7 +2041,8 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                             const char *concurrent_to_uuid, const ip_address *ip,
                             FILE *body, off_t payload_offset, const char *mime_type,
                             int response_code, const char *redirect_location,
-                            char *sha1_payload)
+                            char *sha1_payload, const char **protocol,
+                            const char *cipher_name)
 {
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
   char payload_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
@@ -2066,7 +2137,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                   warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
                   result = warc_write_revisit_record (url, timestamp_str,
                              concurrent_to_uuid, payload_digest, rec_existing->uuid,
-                             rec_existing->uri, rec_existing->date, ip, body);
+                             rec_existing->uri, rec_existing->date, ip, body, protocol, cipher_name);
                   if (luahooks_revisit_malloc == true) xfree(rec_existing);
                   return result;
                 }
@@ -2109,6 +2180,8 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Record-ID", response_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
+  if (!warc_write_protocol (protocol, cipher_name))
+    warc_write_ok = false;
   warc_write_header ("WARC-Target-URI", url);
   date = warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
@@ -2157,7 +2230,8 @@ warc_write_record (const char *record_type, const char *resource_uuid,
                  const char *url, const char *timestamp_str,
                  const char *concurrent_to_uuid,
                  const ip_address *ip, const char *content_type, FILE *body,
-                 off_t payload_offset)
+                 off_t payload_offset, const char **protocol,
+                 const char *cipher_name)
 {
   char uuid_buf[48];
 
@@ -2175,6 +2249,8 @@ warc_write_record (const char *record_type, const char *resource_uuid,
   warc_write_header ("WARC-Record-ID", resource_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
+  if (!warc_write_protocol (protocol, cipher_name))
+    warc_write_ok = false;
   warc_write_header ("WARC-Target-URI", url);
   warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
@@ -2204,11 +2280,12 @@ bool
 warc_write_resource_record (const char *resource_uuid, const char *url,
                  const char *timestamp_str, const char *concurrent_to_uuid,
                  const ip_address *ip, const char *content_type, FILE *body,
-                 off_t payload_offset)
+                 off_t payload_offset, const char **protocol,
+                 const char *cipher_name)
 {
   return warc_write_record ("resource",
       resource_uuid, url, timestamp_str, concurrent_to_uuid,
-      ip, content_type, body, payload_offset);
+      ip, content_type, body, payload_offset, protocol, cipher_name);
 }
 
 /* Writes a metadata record to the WARC file.
@@ -2226,9 +2303,10 @@ bool
 warc_write_metadata_record (const char *record_uuid, const char *url,
                  const char *timestamp_str, const char *concurrent_to_uuid,
                  ip_address *ip, const char *content_type, FILE *body,
-                 off_t payload_offset)
+                 off_t payload_offset, const char **protocol,
+                 const char *cipher_name)
 {
   return warc_write_record ("metadata",
       record_uuid, url, timestamp_str, concurrent_to_uuid,
-      ip, content_type, body, payload_offset);
+      ip, content_type, body, payload_offset, protocol, cipher_name);
 }
