@@ -98,7 +98,7 @@ static struct cookie_jar *wget_cookie_jar;
 #define TEXTCSS_S "text/css"
 
 /* Lowercased request HTTP protocol. */
-#define REQUEST_PROTOCOL "http/1.0"
+#define REQUEST_PROTOCOL "http/1.1"
 
 /* Some status code validation macros: */
 #define H_10X(x)        (((x) >= 100) && ((x) < 200))
