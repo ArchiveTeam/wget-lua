@@ -989,6 +989,7 @@ warc_write_warcinfo_record (const char *filename)
   FILE *warc_tmp;
   char timestamp[22];
   char *filename_basename;
+  int i;
 
   /* Write warc-info record as the first record of the file. */
   /* We add the record id of this info record to the other records in the
@@ -1015,16 +1016,38 @@ warc_write_warcinfo_record (const char *filename)
       return false;
     }
 
-  if (fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE) < 0
+  if (fprintf (warc_tmp, "operator: Archive Team <archiveteam@archiveteam.org>\r\n") < 0
+      || fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE) < 0
       || fprintf (warc_tmp, "format: WARC File Format 1.1\r\n") < 0
       || fprintf (warc_tmp,
 "conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n") < 0
       || fprintf (warc_tmp, "robots: %s\r\n", (opt.use_robots ? "classic" : "off"))  < 0
-      || fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring)  < 0)
+      || fprintf (warc_tmp, "wget-arguments: %s\r\n", program_argstring)  < 0
+      || fprintf (warc_tmp, "wget-build-version: %s\r\n", version_string) < 0
+      || fprintf (warc_tmp, "wget-build-system-host: %s-%s-%s\r\n",
+                  SYSTEM_HOST_CPU, SYSTEM_HOST_VENDOR, SYSTEM_HOST_OS) < 0
+      || fprintf (warc_tmp, "wget-build-system-build: %s-%s-%s\r\n",
+                  SYSTEM_BUILD_CPU, SYSTEM_BUILD_VENDOR, SYSTEM_BUILD_OS) < 0
+      || fprintf (warc_tmp, "wget-build-system-target: %s-%s-%s\r\n",
+                  SYSTEM_TARGET_CPU, SYSTEM_TARGET_VENDOR, SYSTEM_TARGET_OS) < 0
+      || fprintf (warc_tmp, "wget-build-compilation-string: %s\r\n", compilation_string) < 0
+      || fprintf (warc_tmp, "wget-build-link-string: %s\r\n", link_string) < 0
+      || fprintf (warc_tmp, "wget-build-features: ") < 0)
     {
       warc_write_ok = false;
       return false;
     }
+
+  for (i = 0; compiled_features[i]; i++)
+  {
+    if (fprintf (warc_tmp, "%s", compiled_features[i]) < 0
+        || (compiled_features[i+1] != NULL && fprintf (warc_tmp, " ") < 0)
+        || (compiled_features[i+1] == NULL && fprintf (warc_tmp, "\r\n") < 0))
+      {
+        warc_write_ok = false;
+        return false;
+      }
+  }
 
   /* Add the user headers, if any. */
   if (opt.warc_user_headers)

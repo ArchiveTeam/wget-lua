@@ -57,11 +57,39 @@ AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_CC
 
 dnl
-dnl Get canonical host
+dnl Get canonical host system
 dnl
 AC_CANONICAL_HOST
 AC_DEFINE_UNQUOTED([OS_TYPE], "$host_os",
                    [Define to be the name of the operating system.])
+AC_DEFINE_UNQUOTED([SYSTEM_HOST_OS], "$host_os",
+                   [Define to be the name of the host operating system.])
+AC_DEFINE_UNQUOTED([SYSTEM_HOST_CPU], "$host_cpu",
+                   [Define to be the name of the host CPU.])
+AC_DEFINE_UNQUOTED([SYSTEM_HOST_VENDOR], "$host_vendor",
+                   [Define to be the name of the host vendor.])
+
+dnl
+dnl Get canonical build system
+dnl
+AC_CANONICAL_BUILD
+AC_DEFINE_UNQUOTED([SYSTEM_BUILD_OS], "$build_os",
+                   [Define to be the name of the build operating system.])
+AC_DEFINE_UNQUOTED([SYSTEM_BUILD_CPU], "$build_cpu",
+                   [Define to be the name of the build CPU.])
+AC_DEFINE_UNQUOTED([SYSTEM_BUILD_VENDOR], "$build_vendor",
+                   [Define to be the name of the build vendor.])
+
+dnl
+dnl Get canonical target system
+dnl
+AC_CANONICAL_TARGET
+AC_DEFINE_UNQUOTED([SYSTEM_TARGET_OS], "$target_os",
+                   [Define to be the name of the target operating system.])
+AC_DEFINE_UNQUOTED([SYSTEM_TARGET_CPU], "$target_cpu",
+                   [Define to be the name of the target CPU.])
+AC_DEFINE_UNQUOTED([SYSTEM_TARGET_VENDOR], "$target_vendor",
+                   [Define to be the name of the target vendor.])
 
 dnl Non-verbose make
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])

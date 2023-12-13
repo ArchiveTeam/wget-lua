@@ -1101,9 +1101,11 @@ Recursive accept/reject:\n"),
   -np, --no-parent                 don't ascend to the parent directory\n"),
     "\n",
     N_("Email bug reports, questions, discussions to <bug-wget@gnu.org>\n"
-    "and/or open issues at https://savannah.gnu.org/bugs/?func=additem&group=wget.\n")
+    "and/or open issues at https://savannah.gnu.org/bugs/?func=additem&group=wget.\n"),
+    "\n",
     N_("For the additions in Wget-AT over Wget please open an issue at\n"
-    "https://github.com/ArchiveTeam/wget-lua.\n")
+    "https://github.com/ArchiveTeam/wget-lua, send an email to\n"
+    "<archiveteam@archiveteam.org>, or visit #archiveteam-dev on hackint IRC.\n")
   };
 
   size_t i;
@@ -1417,7 +1419,12 @@ There is NO WARRANTY, to the extent permitted by law.\n"), stdout) < 0)
   if (fputs (_("\nOriginally written by Hrvoje Niksic <hniksic@xemacs.org>.\n"),
              stdout) < 0)
     exit (WGET_EXIT_IO_FAIL);
-  if (fputs (_("Please send bug reports and questions to <bug-wget@gnu.org>.\n"),
+  if (fputs (_("For original Wget please send bug reports and questions to\n<bug-wget@gnu.org>.\n"),
+             stdout) < 0)
+    exit (WGET_EXIT_IO_FAIL);
+  if (fputs (_("\nFor the additions in Wget-AT over Wget please open an issue at\n"
+               "https://github.com/ArchiveTeam/wget-lua, send an email to\n"
+               "<archiveteam@archiveteam.org>, or visit #archiveteam-dev on hackint IRC.\n"),
              stdout) < 0)
     exit (WGET_EXIT_IO_FAIL);
 
