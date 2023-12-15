@@ -1016,8 +1016,7 @@ warc_write_warcinfo_record (const char *filename)
       return false;
     }
 
-  if (fprintf (warc_tmp, "operator: Archive Team <archiveteam@archiveteam.org>\r\n") < 0
-      || fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE) < 0
+  if (fprintf (warc_tmp, "software: Wget/%s (%s)\r\n", version_string, OS_TYPE) < 0
       || fprintf (warc_tmp, "format: WARC File Format 1.1\r\n") < 0
       || fprintf (warc_tmp,
 "conformsTo: http://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf\r\n") < 0
