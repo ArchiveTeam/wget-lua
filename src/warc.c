@@ -1508,7 +1508,6 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
          bytes.  */
       idx_t checksum_l;
       char * checksum_v;
-      char *digest;
       base32_decode_alloc (checksum, strlen (checksum), &checksum_v,
                            &checksum_l);
       xfree (checksum);
@@ -1516,8 +1515,7 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       if (checksum_v != NULL && checksum_l == SHA1_DIGEST_SIZE)
         {
           /* This is a valid line with a valid checksum. */
-          memcpy (digest, checksum_v, SHA1_DIGEST_SIZE);
-          store_warc_record(original_url, NULL, record_id, digest);
+          store_warc_record(original_url, NULL, record_id, checksum_v);
           xfree (checksum_v);
         }
       else
