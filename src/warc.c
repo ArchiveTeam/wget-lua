@@ -1260,10 +1260,6 @@ warc_start_new_file (bool meta)
 
   warc_current_file_number++;
 
-  /* init the hash table */
-  warc_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
-                                     warc_cmp_sha1_digest);
-
   base_filename_length = strlen (opt.warc_filename);
   /* filename format:  base + "-" + 5 digit serial number + ".warc.zst" */
   new_filename = xmalloc (base_filename_length + 1 + 5 + 9 + 1);
@@ -1650,6 +1646,10 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
   else
     {
       int nrecords;
+
+      /* init the hash table */
+      warc_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
+                                         warc_cmp_sha1_digest);
 
       /* Load CDX data into the table. */
 
