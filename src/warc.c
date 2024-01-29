@@ -1573,8 +1573,11 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
           /* This is a valid line with a valid checksum. */
           warc_date = cdx_to_warc_timestamp(date);
           store_warc_record(original_url, warc_date, record_id, checksum_v);
+          xfree (warc_date);
+          xfree (original_url);
           xfree (date);
           xfree (checksum_v);
+          xfree (record_id);
         }
       else
         {
