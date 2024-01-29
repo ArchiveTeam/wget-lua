@@ -850,6 +850,42 @@ warc_timestamp (char *timestamp, size_t timestamp_size)
   return timestamp;
 }
 
+/* Checks if the timestamp passed is a valid CDX-style timestamp. */
+static bool
+is_valid_cdx_timestamp (char *timestamp)
+{
+  for (size_t i = 0; i < 14; i++)
+    {
+      if (!c_isdigit (timestamp[i]))
+        {
+          return false;
+        }
+    }
+
+  return timestamp[14] == 0;
+}
+
+static char *
+cdx_to_warc_timestamp (char *cdx_timestamp)
+{
+  char *warc_timestamp = xmalloc (21);
+  memcpy (warc_timestamp     , cdx_timestamp     , 4); /* YYYY */
+  warc_timestamp[4] = '-';                             /* - */
+  memcpy (warc_timestamp + 5 , cdx_timestamp + 4 , 2); /* MM */
+  warc_timestamp[7] = '-';                             /* - */
+  memcpy (warc_timestamp + 8 , cdx_timestamp + 6 , 2); /* DD */
+  warc_timestamp[10] = 'T';                            /* T */
+  memcpy (warc_timestamp + 11, cdx_timestamp + 8 , 2); /* hh */
+  warc_timestamp[13] = ':';                            /* : */
+  memcpy (warc_timestamp + 14, cdx_timestamp + 10, 2); /* mm */
+  warc_timestamp[16] = ':';                            /* : */
+  memcpy (warc_timestamp + 17, cdx_timestamp + 12, 2); /* ss */
+  warc_timestamp[19] = 'Z';                            /* Z */
+  warc_timestamp[20] = 0;
+
+  return warc_timestamp;
+}
+
 /* Fills urn_str with a UUID in the format required
    for the WARC-Record-Id header.
    The string will be 47 characters long. */
@@ -1224,10 +1260,6 @@ warc_start_new_file (bool meta)
 
   warc_current_file_number++;
 
-  /* init the hash table */
-  warc_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
-                                     warc_cmp_sha1_digest);
-
   base_filename_length = strlen (opt.warc_filename);
   /* filename format:  base + "-" + 5 digit serial number + ".warc.zst" */
   new_filename = xmalloc (base_filename_length + 1 + 5 + 9 + 1);
@@ -1427,7 +1459,8 @@ store_warc_record (const char *uri, const char *date, const char *uuid,
    checksum and record ID fields. */
 static bool
 warc_parse_cdx_header (char *lineptr, int *field_num_original_url,
-                       int *field_num_checksum, int *field_num_record_id)
+                       int *field_num_date, int *field_num_checksum,
+                       int *field_num_record_id)
 {
   char *token;
   char *save_ptr;
@@ -1451,6 +1484,9 @@ warc_parse_cdx_header (char *lineptr, int *field_num_original_url,
                 case 'a':
                   *field_num_original_url = field_num;
                   break;
+                case 'b':
+                  *field_num_date = field_num;
+                  break;
                 case 'k':
                   *field_num_checksum = field_num;
                   break;
@@ -1464,16 +1500,19 @@ warc_parse_cdx_header (char *lineptr, int *field_num_original_url,
     }
 
   return *field_num_original_url != -1
+         && *field_num_date != -1
          && *field_num_checksum != -1
          && *field_num_record_id != -1;
 }
 
 /* Parse the CDX record and add it to the warc_dedup_table hash table. */
-static void
+static bool
 warc_process_cdx_line (char *lineptr, int field_num_original_url,
-                       int field_num_checksum, int field_num_record_id)
+                       int field_num_date, int field_num_checksum,
+                       int field_num_record_id)
 {
   char *original_url = NULL;
+  char *date = NULL;
   char *checksum = NULL;
   char *record_id = NULL;
   char *token;
@@ -1487,6 +1526,8 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       char **val;
       if (field_num == field_num_original_url)
         val = &original_url;
+      else if (field_num == field_num_date)
+        val = &date;
       else if (field_num == field_num_checksum)
         val = &checksum;
       else if (field_num == field_num_record_id)
@@ -1501,14 +1542,28 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       field_num++;
     }
 
-  if (original_url != NULL && checksum != NULL && record_id != NULL)
+  if (original_url != NULL
+      && date != NULL
+      && checksum != NULL
+      && record_id != NULL)
     {
+      if (!is_valid_cdx_timestamp (date))
+        {
+          logprintf (LOG_NOTQUIET,
+                     _("CDX line contains invalid timestamp (%s).\n"),
+                     quote (date));
+          xfree (original_url);
+          xfree (date);
+          xfree (checksum);
+          xfree (record_id);
+          return false;
+        }
+
       /* For some extra efficiency, we decode the base32 encoded
          checksum value.  This should produce exactly SHA1_DIGEST_SIZE
          bytes.  */
       idx_t checksum_l;
-      char * checksum_v;
-      char *digest;
+      char *checksum_v, *warc_date;
       base32_decode_alloc (checksum, strlen (checksum), &checksum_v,
                            &checksum_l);
       xfree (checksum);
@@ -1516,13 +1571,18 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
       if (checksum_v != NULL && checksum_l == SHA1_DIGEST_SIZE)
         {
           /* This is a valid line with a valid checksum. */
-          memcpy (digest, checksum_v, SHA1_DIGEST_SIZE);
-          store_warc_record(original_url, NULL, record_id, digest);
+          warc_date = cdx_to_warc_timestamp(date);
+          store_warc_record(original_url, warc_date, record_id, checksum_v);
+          xfree (warc_date);
+          xfree (original_url);
+          xfree (date);
           xfree (checksum_v);
+          xfree (record_id);
         }
       else
         {
           xfree (original_url);
+          xfree (date);
           xfree (checksum_v);
           xfree (record_id);
         }
@@ -1531,8 +1591,11 @@ warc_process_cdx_line (char *lineptr, int field_num_original_url,
     {
       xfree(checksum);
       xfree(original_url);
+      xfree(date);
       xfree(record_id);
     }
+
+  return true;
 }
 
 /* Loads the CDX file from opt.warc_cdx_dedup_filename and fills
@@ -1545,6 +1608,7 @@ warc_load_cdx_dedup_file (void)
   size_t n = 0;
   ssize_t line_length;
   int field_num_original_url = -1;
+  int field_num_date = -1;
   int field_num_checksum = -1;
   int field_num_record_id = -1;
 
@@ -1555,21 +1619,26 @@ warc_load_cdx_dedup_file (void)
   /* The first line should contain the CDX header.
      Format:  " CDX x x x x x"
      where x are field type indicators.  For our purposes, we only
-     need 'a' (the original url), 'k' (the SHA1 checksum) and
-     'u' (the WARC record id). */
+     need 'a' (the original url), 'b' (the date),
+     'k' (the SHA1 checksum) and 'u' (the WARC record id). */
   line_length = getline (&lineptr, &n, f);
   if (line_length != -1)
     warc_parse_cdx_header (lineptr, &field_num_original_url,
-                           &field_num_checksum, &field_num_record_id);
+                           &field_num_date, &field_num_checksum,
+                           &field_num_record_id);
 
-  /* If the file contains all three fields, read the complete file. */
+  /* If the file contains all four fields, read the complete file. */
   if (field_num_original_url == -1
+      || field_num_date == -1
       || field_num_checksum == -1
       || field_num_record_id == -1)
     {
       if (field_num_original_url == -1)
         logprintf (LOG_NOTQUIET,
 _("CDX file does not list original urls. (Missing column 'a'.)\n"));
+      if (field_num_date == -1)
+        logprintf (LOG_NOTQUIET,
+_("CDX file does not list dates. (Missing column 'b'.)\n"));
       if (field_num_checksum == -1)
         logprintf (LOG_NOTQUIET,
 _("CDX file does not list checksums. (Missing column 'k'.)\n"));
@@ -1581,6 +1650,10 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
     {
       int nrecords;
 
+      /* init the hash table */
+      warc_dedup_table = hash_table_new (1000, warc_hash_sha1_digest,
+                                         warc_cmp_sha1_digest);
+
       /* Load CDX data into the table. */
 
       do
@@ -1588,8 +1661,14 @@ _("CDX file does not list record ids. (Missing column 'u'.)\n"));
           line_length = getline (&lineptr, &n, f);
           if (line_length != -1)
             {
-              warc_process_cdx_line (lineptr, field_num_original_url,
-                            field_num_checksum, field_num_record_id);
+              if (!warc_process_cdx_line (lineptr, field_num_original_url,
+                            field_num_date, field_num_checksum,
+                            field_num_record_id))
+                {
+                  xfree (lineptr);
+                  fclose (f);
+                  return false;
+                }
             }
 
         }
