@@ -224,10 +224,12 @@ get_urls_css_file (const char *file, const char *url)
 
   ctx.text = fm->content;
   ctx.head = NULL;
+  ctx.tail = NULL;
   ctx.base = NULL;
   ctx.parent_base = url ? url : opt.base_href;
   ctx.document_file = file;
   ctx.nofollow = 0;
+  ctx.keep_order = !opt.no_links_ordering;
 
   get_urls_css (&ctx, 0, fm->length);
   wget_read_file_free (fm);

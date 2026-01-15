@@ -387,6 +387,7 @@ static struct cmdline_option option_data[] =
 #endif
     { "no-clobber", 0, OPT_BOOLEAN, "noclobber", -1 },
     { "no-config", 0, OPT_BOOLEAN, "noconfig", -1},
+    { "no-links-ordering", 0, OPT_BOOLEAN, "nolinksordering", -1 },
     { "no-parent", 0, OPT_BOOLEAN, "noparent", -1 },
     { "output-document", 'O', OPT_VALUE, "outputdocument", -1 },
     { "output-file", 'o', OPT_VALUE, "logfile", -1 },
@@ -1042,6 +1043,9 @@ Recursive download:\n"),
     N_("\
        --convert-file-only         convert the file part of the URLs only (usually known as the basename)\n"),
     N_("\
+       --no-links-ordering         do not order extracted links by position; invalid with\n\
+                                     --convert-links or --convert-file-only\n"),
+    N_("\
        --backups=N                 before writing file X, rotate up to N backup files\n"),
 
 #ifdef __VMS
@@ -1688,6 +1692,13 @@ main (int argc, char **argv)
                     _("Both --no-clobber and --convert-file-only were specified,"
                       " only --convert-file-only will be used.\n"));
       opt.noclobber = false;
+    }
+  if (opt.no_links_ordering && (opt.convert_links || opt.convert_file_only))
+    {
+      fprintf (stderr, _("\
+--no-links-ordering cannot be used with --convert-links or --convert-file-only.\n"));
+      print_usage (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
     }
 
   if (opt.rotate_dns && !opt.dns_cache)

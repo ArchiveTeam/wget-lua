@@ -46,6 +46,8 @@ struct map_context {
                                    <meta name=robots> tag. */
 
   struct urlpos *head;          /* List of URLs that is being built. */
+  struct urlpos *tail;          /* Tail of URL list for O(1) append. */
+  bool keep_order;              /* Keep URLs ordered by position. */
 };
 
 struct urlpos *get_urls_file (const char *);

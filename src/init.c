@@ -276,6 +276,7 @@ static const struct {
 #endif
   { "noclobber",        &opt.noclobber,         cmd_boolean },
   { "noconfig",         &opt.noconfig,          cmd_boolean },
+  { "nolinksordering",  &opt.no_links_ordering, cmd_boolean },
   { "noparent",         &opt.no_parent,         cmd_boolean },
   { "noproxy",          &opt.no_proxy,          cmd_vector },
   { "numtries",         &opt.ntry,              cmd_number_inf },/* deprecated*/
@@ -443,6 +444,7 @@ defaults (void)
   opt.http_keep_alive = true;
   opt.use_proxy = true;
   opt.convert_file_only = false;
+  opt.no_links_ordering = false;
   tmp = getenv ("no_proxy");
   if (tmp)
     opt.no_proxy = sepstring (tmp);

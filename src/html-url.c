@@ -464,9 +464,22 @@ append_url (const char *link_uri, int position, int size,
   else if (link_has_scheme)
     newel->link_complete_p = 1;
 
+  if (!ctx->keep_order)
+    {
+      if (ctx->tail)
+        ctx->tail->next = newel;
+      else
+        ctx->head = newel;
+      ctx->tail = newel;
+      return newel;
+    }
+
   /* Append the new URL maintaining the order by position.  */
   if (ctx->head == NULL)
-    ctx->head = newel;
+    {
+      ctx->head = newel;
+      ctx->tail = newel;
+    }
   else
     {
       struct urlpos *it, *prev = NULL;
@@ -484,6 +497,8 @@ append_url (const char *link_uri, int position, int size,
         prev->next = newel;
       else
         ctx->head = newel;
+      if (!newel->next)
+        ctx->tail = newel;
     }
 
   return newel;
@@ -967,10 +982,12 @@ get_urls_html_fm (const char *file, const struct file_memory *fm,
 
   ctx.text = fm->content;
   ctx.head = NULL;
+  ctx.tail = NULL;
   ctx.base = NULL;
   ctx.parent_base = url ? url : opt.base_href;
   ctx.document_file = file;
   ctx.nofollow = false;
+  ctx.keep_order = !opt.no_links_ordering;
 
   if (!interesting_tags)
     init_interesting ();
