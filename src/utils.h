@@ -70,6 +70,7 @@ char *xstrdup_lower (const char *);
 char *xstrdup_upper (const char *);
 
 char *strdupdelim (const char *, const char *);
+char *strdup_trimmed_space (const char *, const char *);
 char **sepstring (const char *);
 bool subdir_p (const char *, const char *);
 bool fork_to_background (void);

@@ -7,6 +7,7 @@
 #include "iri.h"
 #include "recur.h"
 #include "exits.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,6 +114,79 @@ handle_lua_error (int res)
             fflush(stderr);
             abort();
         }
+    }
+}
+
+static void
+headers_to_lua_object (const char *raw)
+{
+  struct http_header *header_list = NULL;
+  struct http_header *cur;
+  char *status_line = NULL;
+  lua_createtable (lua, 0, 3);
+
+  if (raw == NULL)
+    {
+      lua_pushnil (lua);
+      lua_setfield (lua, -2, "raw");
+      lua_pushnil (lua);
+      lua_setfield (lua, -2, "status");
+      lua_pushnil (lua);
+      lua_setfield (lua, -2, "headers");
+      return;
+    }
+  lua_pushstring (lua, raw);
+  lua_setfield (lua, -2, "raw");
+
+  header_list = http_parse_raw_headers (raw, &status_line);
+  if (status_line != NULL)
+    lua_pushstring (lua, status_line);
+  else
+    lua_pushnil (lua);
+  lua_setfield (lua, -2, "status");
+  xfree (status_line);
+
+  lua_newtable (lua);
+
+  cur = header_list;
+  while (cur != NULL)
+    {
+      const char *name = cur->name ? cur->name : "";
+      const char *value = cur->value ? cur->value : "";
+      char *lower_key = xstrdup_lower (name);
+      int res;
+
+      lua_getglobal (lua, "table");
+      lua_getfield (lua, -1, "insert");
+      lua_remove (lua, -2);
+
+      lua_getfield (lua, -2, lower_key);
+      if (lua_isnil (lua, -1))
+        {
+          lua_pop (lua, 1);
+          lua_createtable (lua, 1, 0);
+          lua_setfield (lua, -3, lower_key);
+          lua_getfield (lua, -2, lower_key);
+        }
+
+      lua_pushstring (lua, value);
+      res = lua_pcall (lua, 2, 0, 0);
+      if (res != 0)
+        handle_lua_error (res);
+
+      xfree (lower_key);
+      cur = cur->next;
+    }
+
+  lua_setfield (lua, -2, "headers");
+
+  while (header_list != NULL)
+    {
+      struct http_header *next = header_list->next;
+      xfree (header_list->name);
+      xfree (header_list->value);
+      xfree (header_list);
+      header_list = next;
     }
 }
 
@@ -385,8 +459,8 @@ http_stat_to_lua_table (const struct http_stat *hs)
     }
   else
     {
-      /* Create a table for 18 elements. */
-      lua_createtable (lua, 0, 18);
+      /* Create a table for 21 elements. */
+      lua_createtable (lua, 0, 21);
       LUA_PUSH_FROM_STRUCT (integer, hs, len);
       LUA_PUSH_FROM_STRUCT (integer, hs, contlen);
       LUA_PUSH_FROM_STRUCT (integer, hs, restval);
@@ -397,6 +471,11 @@ http_stat_to_lua_table (const struct http_stat *hs)
       LUA_PUSH_FROM_STRUCT (string,  hs, error);
       LUA_PUSH_FROM_STRUCT (integer, hs, statcode);
       LUA_PUSH_FROM_STRUCT (string,  hs, message);
+      headers_to_lua_object (hs->request_headers);
+      lua_setfield (lua, -2, "request_headers");
+      headers_to_lua_object (hs->response_headers);
+      lua_setfield (lua, -2, "response_headers");
+      LUA_PUSH_FROM_STRUCT (string,  hs, request_body);
       LUA_PUSH_FROM_STRUCT (integer, hs, rd_size);
       LUA_PUSH_FROM_STRUCT (number,  hs, dltime);
       LUA_PUSH_FROM_STRUCT (string,  hs, referer);
@@ -831,4 +910,3 @@ luahooks_before_exit (int exit_status)
       return answer;
     }
 }
-

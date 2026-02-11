@@ -335,10 +335,13 @@ request_set_user_header (struct request *req, const char *header)
 
 /* Construct the request and write it to FD using fd_write.
    If warc_tmp is set to a file pointer, the request string will
-   also be written to that file. */
+   also be written to that file.
+   If REQUEST_HEADERS_OUT is not NULL, store the request header string
+   in *REQUEST_HEADERS_OUT. */
 
 static int
-request_send (const struct request *req, int fd, FILE *warc_tmp)
+request_send (const struct request *req, int fd, FILE *warc_tmp,
+              char **request_headers_out)
 {
   char *request_string, *p;
   int i, size, write_error;
@@ -399,7 +402,12 @@ request_send (const struct request *req, int fd, FILE *warc_tmp)
       if (warc_tmp_written != size - 1)
         write_error = -2;
     }
-  xfree (request_string);
+
+  if (request_headers_out != NULL)
+    *request_headers_out = request_string;
+  else
+    xfree (request_string);
+
   return write_error;
 }
 
@@ -894,6 +902,68 @@ resp_free (struct response **resp_ref)
   xfree (resp);
 
   *resp_ref = NULL;
+}
+
+/* Parse RAW_HEADERS into a list of header key value pairs.
+   Set *STATUS_LINE_OUT to the trimmed status line.
+   Returns NULL on empty/unparseable input.  */
+struct http_header *
+http_parse_raw_headers (const char *raw_headers, char **status_line_out)
+{
+  struct http_header *head = NULL;
+  struct http_header *tail = NULL;
+  char *raw_copy;
+  struct response *resp;
+  int i;
+
+  assert (status_line_out != NULL);
+  *status_line_out = NULL;
+
+  if (raw_headers == NULL)
+    return NULL;
+
+  raw_copy = xstrdup (raw_headers);
+  resp = resp_new (raw_copy);
+
+  if (resp->headers && resp->headers[1])
+    {
+      *status_line_out = strdup_trimmed_space (resp->headers[0], resp->headers[1]);
+
+      for (i = 1; resp->headers[i + 1]; i++)
+        {
+          const char *current_header = resp->headers[i];
+          const char *next_header = resp->headers[i + 1];
+          const char *colon = memchr (current_header, ':',
+                                      next_header - current_header);
+          char *name;
+          char *value;
+          struct http_header *header;
+
+          if (colon == NULL)
+            continue;
+
+          name = strdup_trimmed_space (current_header, colon);
+          if (name[0] == '\0')
+            {
+              xfree (name);
+              continue;
+            }
+          value = strdup_trimmed_space (colon + 1, next_header);
+          header = xnew (struct http_header);
+          header->name = name;
+          header->value = value;
+          header->next = NULL;
+          if (tail != NULL)
+            tail->next = header;
+          else
+            head = header;
+          tail = header;
+        }
+    }
+
+  resp_free (&resp);
+  xfree (raw_copy);
+  return head;
 }
 
 /* Print a single line of response, the characters [b, e).  We tried
@@ -1616,6 +1686,9 @@ free_hstat (struct http_stat *hs)
   xfree (hs->local_file);
   xfree (hs->orig_file_name);
   xfree (hs->message);
+  xfree (hs->request_headers);
+  xfree (hs->response_headers);
+  xfree (hs->request_body);
 #ifdef HAVE_METALINK
   metalink_delete (hs->metalink);
   hs->metalink = NULL;
@@ -2154,7 +2227,7 @@ establish_connection (const struct url *u, const struct url **conn_ref,
                               aprintf ("%s:%d", u->host, u->port),
                               rel_value);
 
-          write_error = request_send (connreq, sock, 0);
+          write_error = request_send (connreq, sock, 0, NULL);
           request_free (&connreq);
           if (write_error < 0)
             {
@@ -3220,6 +3293,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 #endif
 
   char *head = NULL;
+  char *head_raw = NULL;
   struct response *resp = NULL;
   char hdrval[512];
   char *message = NULL;
@@ -3282,6 +3356,12 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
   xfree (hs->message);
   hs->local_encoding = ENC_NONE;
   hs->remote_encoding = ENC_NONE;
+  xfree (hs->request_headers);
+  hs->request_headers = NULL;
+  xfree (hs->response_headers);
+  hs->response_headers = NULL;
+  xfree (hs->request_body);
+  hs->request_body = NULL;
 
   conn = u;
 
@@ -3378,7 +3458,16 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
     }
 
   /* Send the request to server.  */
-  write_error = request_send (req, sock, warc_tmp);
+  xfree (hs->request_headers);
+  write_error = request_send (req, sock, warc_tmp, &hs->request_headers);
+  xfree (hs->response_headers);
+  hs->response_headers = NULL;
+  xfree (hs->request_body);
+  hs->request_body = NULL;
+  if (opt.body_data != NULL)
+    hs->request_body = xstrdup (opt.body_data);
+  else if (opt.body_file == NULL || body_data_size == 0)
+    hs->request_body = xstrdup ("");
 
   if (write_error >= 0)
     {
@@ -3487,6 +3576,8 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           }
         DEBUGP (("\n---response begin---\n%s---response end---\n", head));
 
+        xfree (head_raw);
+        head_raw = xstrdup (head);
         resp = resp_new (head);
 
         /* Check for status line.  */
@@ -3506,6 +3597,8 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
         if (H_10X (statcode))
           {
+            xfree (head_raw);
+            head_raw = NULL;
             xfree (head);
             resp_free (&resp);
             _repeat = true;
@@ -3513,6 +3606,9 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           }
         else
           {
+            xfree (hs->response_headers);
+            hs->response_headers = head_raw;
+            head_raw = NULL;
             _repeat = false;
           }
       }
@@ -4304,6 +4400,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
 
   cleanup:
   xfree (head);
+  xfree (head_raw);
   xfree (type);
   xfree (message);
   resp_free (&resp);

@@ -62,6 +62,7 @@ as that of the covered work.  */
 #include <setjmp.h>
 
 #include <regex.h>
+#include "xstrndup.h"
 #ifdef HAVE_LIBPCRE2
 # define PCRE2_CODE_UNIT_WIDTH 8
 # include <pcre2.h>
@@ -252,6 +253,18 @@ strdupdelim (const char *beg, const char *end)
     }
 
   return xstrdup("");
+}
+
+/* Copy text between A and B, trimming leading and trailing spaces.  */
+char *
+strdup_trimmed_space (const char *a, const char *b)
+{
+  while (a < b && c_isspace (*a))
+    ++a;
+  while (b > a && c_isspace (b[-1]))
+    --b;
+
+  return xstrndup (a, b - a);
 }
 
 /* Parse a string containing comma-separated elements, and return a

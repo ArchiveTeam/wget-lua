@@ -44,6 +44,14 @@ typedef enum
 } encoding_t;
 
 struct url;
+
+struct http_header
+{
+  char *name;
+  char *value;
+  struct http_header *next;
+};
+
 struct http_stat
 {
   wgint len;                    /* received length */
@@ -56,6 +64,9 @@ struct http_stat
   char *error;                  /* textual HTTP error */
   int statcode;                 /* status code */
   char *message;                /* status message */
+  char *request_headers;        /* raw HTTP request line and headers */
+  char *response_headers;       /* raw HTTP status line and headers */
+  char *request_body;           /* request body from --body-data or Lua body_data */
   wgint rd_size;                /* amount of data read from socket */
   double dltime;                /* time it took to download the data */
   const char *referer;          /* value of the referer header. */
@@ -92,5 +103,7 @@ typedef struct {
   const char *b, *e;
 } param_token;
 bool extract_param (const char **, param_token *, param_token *, char, bool *);
+struct http_header *http_parse_raw_headers (const char *raw_headers,
+                                            char **status_line_out);
 
 #endif /* HTTP_H */
