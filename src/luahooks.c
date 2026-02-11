@@ -265,7 +265,13 @@ luahooks_init ()
   lua_remove(lua, -2);
 
   int res = luaL_loadfile (lua, opt.lua_filename);
-  res |= lua_pcall (lua, 0, LUA_MULTRET, DEBUG_TRACEBACK_INDEX);
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return;
+    }
+
+  res = lua_pcall (lua, 0, LUA_MULTRET, DEBUG_TRACEBACK_INDEX);
   if (res != 0)
     handle_lua_error (res);
 
