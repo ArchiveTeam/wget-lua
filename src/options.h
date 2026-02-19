@@ -144,8 +144,10 @@ struct options
   bool warc_zstd_dict_no_compression;
   bool warc_dedup_disable;
   bool warc_dedup_url_agnostic;
+  bool warc_dedup_scheme_agnostic;
   int warc_dedup_min_size;
   char *warc_item_name;
+  bool warc_ftp_html_conversion;
 
   bool enable_xattr;            /* Store metadata in POSIX extended attributes. */
 
@@ -252,7 +254,8 @@ struct options
     secure_protocol_tlsv1_1,
     secure_protocol_tlsv1_2,
     secure_protocol_tlsv1_3,
-    secure_protocol_pfs
+    secure_protocol_pfs,
+    secure_protocol_none
   } secure_protocol;            /* type of secure protocol to use. */
   int check_cert;               /* whether to validate the server's cert */
   char *cert_file;              /* external client certificate to use. */

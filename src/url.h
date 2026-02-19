@@ -113,6 +113,7 @@ char *url_full_path (const struct url *);
 void url_set_dir (struct url *, const char *);
 void url_set_file (struct url *, const char *);
 void url_free (struct url *);
+struct url *url_copy (struct url *);
 
 enum url_scheme url_scheme (const char *);
 bool url_has_scheme (const char *);

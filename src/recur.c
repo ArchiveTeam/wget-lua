@@ -232,6 +232,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
   /* The queue of URLs we need to load. */
   struct url_queue *queue;
 
+  struct luahooks_url *luahooks_url;
+
   /* The URLs we do not wish to enqueue, because they are already in
      the queue, but haven't been downloaded yet.  */
   struct hash_table *blacklist;
@@ -293,6 +295,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
       char *saved_method = NULL;
       char **saved_user_headers = NULL;
 
+      if (luahooks_url != NULL)
+        abort ();
 
       if (opt.quota && total_downloaded_bytes > opt.quota)
         break;
@@ -393,7 +397,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
                 }
 
               status = retrieve_url (url_parsed, url, &file, &redirected, referer,
-                                     &dt, false, i, true);
+                                     &dt, opt.recursive, i, true, blacklist,
+                                     &luahooks_url);
 
               if (headers)
                 {
@@ -564,8 +569,13 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
             }
         }
 
-      struct luahooks_url *luahooks_urls = luahooks_get_urls (file, url, is_css, i);
-      struct luahooks_url *lh_url = luahooks_urls;
+      if (strncmp (url, "ftp", 3) != 0)
+        {
+          if (luahooks_url != NULL)
+            abort ();
+          luahooks_url = luahooks_get_urls (file, url, is_css, i);
+        }
+      struct luahooks_url *lh_url = luahooks_url;
       struct luahooks_url_header *lh_headers = NULL;
       while (lh_url != NULL)
         {
@@ -594,6 +604,8 @@ retrieve_tree (struct url *start_url_parsed, struct iri *pi)
           xfree (lh_url);
           lh_url = next_lh_url;
         }
+
+      luahooks_url = lh_url;
 
       if (file
           && (opt.delete_after

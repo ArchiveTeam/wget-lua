@@ -1239,6 +1239,36 @@ url_free (struct url *url)
     }
 }
 
+char *
+xstrdup_with_null (char *s)
+{
+  if (s == NULL)
+    return NULL;
+  else
+    return xstrdup (s);
+}
+
+struct url *
+url_copy (struct url *url)
+{
+  struct url *copy = xnew0 (struct url);
+
+  copy->url = xstrdup_with_null (url->url);
+  copy->scheme = url->scheme;
+  copy->host = xstrdup_with_null (url->host);
+  copy->port = url->port;
+  copy->path = xstrdup_with_null (url->path);
+  copy->params = xstrdup_with_null (url->params);
+  copy->query = xstrdup_with_null (url->query);
+  copy->fragment = xstrdup_with_null (url->fragment);
+  copy->dir = xstrdup_with_null (url->dir);
+  copy->file = xstrdup_with_null (url->file);
+  copy->user = xstrdup_with_null (url->user);
+  copy->passwd = xstrdup_with_null (url->passwd);
+
+  return copy;
+}
+
 /* Create all the necessary directories for PATH (a file).  Calls
    make_directory internally.  */
 int

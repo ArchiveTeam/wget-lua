@@ -870,7 +870,8 @@ static char *getproxy (struct url *);
 uerr_t
 retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
               char **newloc, const char *refurl, int *dt, bool recursive,
-              struct iri *iri, bool register_status)
+              struct iri *iri, bool register_status, struct hash_table *blacklist,
+              struct luahooks_url **luahooks_url)
 {
   uerr_t result;
   char *url;
@@ -986,12 +987,38 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
          and opt.recursive, both being undesirable when following
          redirects.  */
       bool oldrec = recursive, glob = opt.ftp_glob;
+      struct hash_table *local_blacklist = NULL;
+
+      /* While the current function is supposed to retrieve only a single URL,
+         calling the ftp_loop here will cause a tree of URLs to be retrieved.
+         Here, either wget itself or the Lua hooks will exract URLs. Only the
+         URLs extracted (and archived) by Wget itself will be added to the
+         general blacklist, while those URLs in the local blacklist in
+         ftp_loop which have been exracted by the Lua hook but not retrieved
+         yet, are not added to the general blacklist. These URLs will be
+         further processed in retrieve_tree. */
+      if (blacklist != NULL)
+        local_blacklist = make_string_hash_table (0);
+
       if (redirection_count)
         oldrec = glob = false;
 
       result = ftp_loop (u, orig_parsed, &local_file, dt, proxy_url,
-                         recursive, glob);
+                         recursive, glob, local_blacklist, luahooks_url);
       recursive = oldrec;
+
+      if (blacklist != NULL)
+        {
+          hash_table_iterator iter;
+          for (hash_table_iterate (local_blacklist, &iter); hash_table_iter_next (&iter); )
+            {
+              /* Only add the URLs extracted by Wget (not the Lua hook) to
+                 the general blacklist. */
+              if (strcmp (iter.value, "wget") == 0)
+                string_set_add (blacklist, iter.key);
+            }
+          string_set_free (local_blacklist);
+        }
 
       /* There is a possibility of having HTTP being redirected to
          FTP.  In these cases we must decide whether the text is HTML
@@ -1189,7 +1216,8 @@ bail:
    If opt.recursive is set, call retrieve_tree() for each file.  */
 
 uerr_t
-retrieve_from_file (const char *file, bool html, int *count)
+retrieve_from_file (const char *file, bool html, int *count,
+                    struct hash_table *blacklist, struct luahooks_url **luahooks_url)
 {
   uerr_t status;
   struct urlpos *url_list, *cur_url;
@@ -1222,7 +1250,7 @@ retrieve_from_file (const char *file, bool html, int *count)
         opt.base_href = xstrdup (url);
 
       status = retrieve_url (url_parsed, url, &url_file, NULL, NULL, &dt,
-                             false, iri, true);
+                             false, iri, true, blacklist, luahooks_url);
       url_free (url_parsed);
 
       if (!url_file || (status != RETROK))
@@ -1272,11 +1300,8 @@ retrieve_from_file (const char *file, bool html, int *count)
 
       proxy = getproxy (cur_url->url);
       if ((opt.recursive || opt.page_requisites || luahooks_can_generate_urls ())
-          && ((cur_url->url->scheme != SCHEME_FTP
-#ifdef HAVE_SSL
-          && cur_url->url->scheme != SCHEME_FTPS
-#endif
-          ) || proxy))
+          && (true // also include FTP and FTPS
+              || proxy))
         {
           int old_follow_ftp = opt.follow_ftp;
 
@@ -1297,7 +1322,7 @@ retrieve_from_file (const char *file, bool html, int *count)
         status = retrieve_url (parsed_url ? parsed_url : cur_url->url,
                                cur_url->url->url, &filename,
                                &new_file, NULL, &dt, opt.recursive, tmpiri,
-                               true);
+                               true, blacklist, luahooks_url);
       xfree (proxy);
 
       if (parsed_url)

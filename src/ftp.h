@@ -34,6 +34,7 @@ as that of the covered work.  */
 #include <stdio.h>
 #include <stdbool.h>
 
+#include "hash.h"
 #include "host.h"
 #include "url.h"
 
@@ -67,36 +68,46 @@ enum prot_level
 };
 #endif
 
-uerr_t ftp_response (int, char **);
-uerr_t ftp_greeting (int);
-uerr_t ftp_login (int, const char *, const char *);
-uerr_t ftp_port (int, int *);
-uerr_t ftp_pasv (int, ip_address *, int *);
+int write_control_message_send (char *buf, int bufsize, FILE *warc_conv_tmp);
+int write_control_message_recv (char *buf, int bufsize, FILE *warc_conv_tmp);
+int write_control_message_event (char *buf, int bufsize, FILE *warc_conv_tmp);
+
+uerr_t ftp_response (int, char **, FILE *warc_conv_tmp);
+uerr_t ftp_greeting (int, FILE *warc_conv_tmp);
+uerr_t ftp_login (int, const char *, const char *, FILE *warc_conv_tmp);
+uerr_t ftp_port (int, int *, FILE *warc_conv_tmp);
+uerr_t ftp_pasv (int, ip_address *, int *, FILE *warc_conv_tmp);
 #ifdef HAVE_SSL
-uerr_t ftp_auth (int, enum url_scheme);
-uerr_t ftp_pbsz (int, int);
-uerr_t ftp_prot (int, enum prot_level);
+uerr_t ftp_auth (int, enum url_scheme, FILE *warc_conv_tmp);
+uerr_t ftp_pbsz (int, int, FILE *warc_conv_tmp);
+uerr_t ftp_prot (int, enum prot_level, FILE *warc_conv_tmp);
 #endif
 #ifdef ENABLE_IPV6
-uerr_t ftp_lprt (int, int *);
-uerr_t ftp_lpsv (int, ip_address *, int *);
-uerr_t ftp_eprt (int, int *);
-uerr_t ftp_epsv (int, ip_address *, int *);
+uerr_t ftp_lprt (int, int *, FILE *warc_conv_tmp);
+uerr_t ftp_lpsv (int, ip_address *, int *, FILE *warc_conv_tmp);
+uerr_t ftp_eprt (int, int *, FILE *warc_conv_tmp);
+uerr_t ftp_epsv (int, ip_address *, int *, FILE *warc_conv_tmp);
 #endif
-uerr_t ftp_type (int, int);
-uerr_t ftp_cwd (int, const char *);
-uerr_t ftp_retr (int, const char *);
-uerr_t ftp_rest (int, wgint);
-uerr_t ftp_list (int, const char *, bool, bool, bool *);
-uerr_t ftp_syst (int, enum stype *, enum ustype *);
-uerr_t ftp_pwd (int, char **);
-uerr_t ftp_size (int, const char *, wgint *);
+uerr_t ftp_type (int, int, FILE *warc_conv_tmp);
+uerr_t ftp_cwd (int, const char *, FILE *warc_conv_tmp);
+uerr_t ftp_retr (int, const char *, FILE *warc_conv_tmp);
+uerr_t ftp_rest (int, wgint, FILE *warc_conv_tmp);
+uerr_t ftp_list (int, const char *, bool, bool, bool *, FILE *warc_conv_tmp);
+uerr_t ftp_syst (int, enum stype *, enum ustype *, FILE *warc_conv_tmp);
+uerr_t ftp_feat (int, FILE *warc_conv_tmp);
+uerr_t ftp_quit (int, FILE *warc_conv_tmp);
+uerr_t ftp_help (int, FILE *warc_conv_tmp);
+uerr_t ftp_stat (int, FILE *warc_conv_tmp);
+uerr_t ftp_noop (int, FILE *warc_conv_tmp);
+uerr_t ftp_pwd (int, char **, FILE *warc_conv_tmp);
+uerr_t ftp_size (int, const char *, wgint *, FILE *warc_conv_tmp);
 
 #ifdef ENABLE_OPIE
 const char *skey_response (int, const char *, const char *);
 #endif
 
 struct url;
+struct luahooks_url;
 
 /* File types.  */
 enum ftype
@@ -120,6 +131,19 @@ enum parsetype
   TT_HOUR_MIN, TT_DAY
 };
 
+/* Reason for rejecting a FTP URL. */
+typedef enum
+{
+  FTP_RR_SUCCESS,
+  FTP_RR_NOTACCEPTABLE,
+  FTP_RR_INSECURENAME,
+  FTP_RR_INVALID,
+  FTP_RR_REGEX,
+  FTP_RR_GLOB,
+  FTP_RR_LUAHOOK,
+  FTP_RR_BLACKLIST
+} ftp_reject_reason;
+
 
 /* Information about one filename in a linked list.  */
 struct fileinfo
@@ -133,6 +157,48 @@ struct fileinfo
   char *linkto;             /* link to which file points */
   struct fileinfo *prev;    /* previous... */
   struct fileinfo *next;    /* ...and next structure. */
+};
+
+/* Tracking some information from http_stat in http.h for the Lua hooks. */
+struct http_stat_partial
+{
+  wgint len;                    /* received length */
+  wgint contlen;                /* expected length */
+  wgint restval;                /* the restart value */
+  int res;                      /* the result of last read */
+  char *rderrmsg;               /* error message from read error */
+  int statcode;                 /* status code */
+  char *message;                /* status message */
+  wgint rd_size;                /* amount of data read from socket */
+  double dltime;                /* time it took to download the data */
+  char *local_file;             /* local file name. */
+};
+
+/* The WARC control conversation metadata record requires context
+   information coming from the resource record holding the FTP data.
+   The information is stored in this struct. */
+struct warc_context
+{
+  FILE *ccon_fp;                /* WARC conversation file pointer */
+  FILE *fp;                     /* WARC resource data file pointer */
+  FILE *html_fp;                /* HTML directory file pointer */
+  bool written_resource;        /* if the FTP data was written to fp */
+  int is_list;                  /* if a LIST command will be or was run to retrieve the content */
+  off_t number;                 /* the number of the conversation record in the session */
+  ip_address ip_addr;           /* IP address of the control connection */
+  ip_address ip_addr_data;      /* IP address of the data connection */
+  char concurrent_to_uuid[48];  /* WARC record ID of the metadata conversation */
+  char record_id_uuid[48];      /* WARC record ID of the resource */
+  char origin_id_uuid[48];      /* WARC record ID of the first record of the session */
+  struct url *url;              /* current URL */
+  enum secure_protocol csock_protocol;
+  const char *csock_cipher_name;
+  enum secure_protocol dtsock_protocol;
+  const char *dtsock_cipher_name;
+
+  struct fileinfo *fileinfo;
+
+  struct http_stat_partial *hstatp;
 };
 
 /* Commands for FTP functions.  */
@@ -174,9 +240,9 @@ struct fileinfo *ftp_parse_ls (const char *, const enum stype);
 struct fileinfo *ftp_parse_ls_fp (FILE *, const enum stype);
 void freefileinfo(struct fileinfo *);
 uerr_t ftp_loop (struct url *, struct url *, char **, int *, struct url *,
-                 bool, bool);
+                 bool, bool, struct hash_table *, struct luahooks_url **);
 
-uerr_t ftp_index (const char *, struct url *, struct fileinfo *);
+uerr_t ftp_index (const char *, struct url *, struct fileinfo *, struct warc_context *);
 
 char ftp_process_type (const char *);
 

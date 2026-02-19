@@ -372,9 +372,11 @@ static const struct {
 #endif
   { "warcdedupdisable", &opt.warc_dedup_disable, cmd_boolean },
   { "warcdedupminsize", &opt.warc_dedup_min_size, cmd_number },
+  { "warcdedupschemeagnostic", &opt.warc_dedup_scheme_agnostic, cmd_boolean },
   { "warcdedupurlagnostic", &opt.warc_dedup_url_agnostic, cmd_boolean },
   { "warcdigests",      &opt.warc_digests_enabled, cmd_boolean },
   { "warcfile",         &opt.warc_filename,     cmd_file },
+  { "warcftphtmlconversion", &opt.warc_ftp_html_conversion, cmd_boolean },
   { "warcheader",       NULL,                   cmd_spec_warc_header },
   { "warcitemname",     &opt.warc_item_name,    cmd_string },
   { "warckeeplog",      &opt.warc_keep_log,     cmd_boolean },
@@ -540,12 +542,14 @@ defaults (void)
   opt.warc_dedup_disable = false;
   opt.warc_dedup_min_size = 100;
   opt.warc_dedup_url_agnostic = false;
+  opt.warc_dedup_scheme_agnostic = false;
   opt.warc_digests_enabled = true;
   opt.warc_cdx_enabled = false;
   opt.warc_cdx_dedup_filename = NULL;
   opt.warc_tempdir = NULL;
   opt.warc_keep_log = true;
   opt.warc_item_name = NULL;
+  opt.warc_ftp_html_conversion = false;
 
   /* Use a negative value to mark the absence of --start-pos option */
   opt.start_pos = -1;

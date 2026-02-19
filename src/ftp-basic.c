@@ -44,6 +44,68 @@ as that of the covered work.  */
 #include "retr.h"
 #include "c-strcase.h"
 
+/* Write a control message to a file with prefix. This is mainly
+   used for the control conversation metadata record in a WARC
+   file. */
+int
+write_control_message (char *prefix, int prefixsize, char *buf,
+                        int bufsize, FILE *conv_file)
+{
+  if (conv_file == NULL)
+    return 0;
+
+  if (prefixsize == -1)
+    prefixsize = strlen (prefix);
+  if (bufsize == -1)
+    bufsize = strlen (buf);
+
+  if (bufsize == 0)
+    return 0;
+
+  if (fwrite (prefix, 1, prefixsize, conv_file) != prefixsize
+      || fwrite (buf, 1, bufsize, conv_file) != bufsize)
+    return -1;
+
+  return 0;
+}
+
+/* Write and send control message to a file. This is an outgoing
+   message towards an FTP server. */
+int
+write_control_message_send (char *buf, int bufsize, FILE *conv_file)
+{
+  return write_control_message("> ", 2, buf, bufsize, conv_file);
+}
+
+/* Write and receive control message to a file. This is an
+   incoming message from an FTP server. */
+int
+write_control_message_recv (char *buf, int bufsize, FILE *conv_file)
+{
+  return write_control_message("< ", 2, buf, bufsize, conv_file);
+}
+
+/* Write and event control message to a file. This is not
+   communication with an FTP server, but rather a information
+   message containing context. */
+int
+write_control_message_event (char *buf, int bufsize, FILE *conv_file)
+{
+  return write_control_message("* ", 2, buf, bufsize, conv_file);
+}
+
+/* Write to both file descriptor and conv_file file if
+   not NULL. */
+int
+fd_write_with_file (int fd, char *buf, int bufsize, double timeout,
+                    FILE *conv_file)
+{
+  if (conv_file != NULL
+      && write_control_message_send (buf, bufsize, conv_file) < 0)
+    return -1;
+
+  return fd_write (fd, buf, bufsize, timeout);
+}
 
 /* Get the response of FTP server and allocate enough room to handle
    it.  <CR> and <LF> characters are stripped from the line, and the
@@ -55,7 +117,7 @@ as that of the covered work.  */
    returned, and the value of *ret_line should be ignored.  */
 
 uerr_t
-ftp_response (int fd, char **ret_line)
+ftp_response (int fd, char **ret_line, FILE *conv_file)
 {
   for (;;)
     {
@@ -63,6 +125,11 @@ ftp_response (int fd, char **ret_line)
       char *line = fd_read_line (fd);
       if (!line)
         return FTPRERR;
+
+      if (conv_file != NULL
+          && write_control_message_recv (line, strlen(line),
+                                          conv_file) < 0)
+        return WRITEFAILED;
 
       /* Strip trailing CRLF before printing the line, so that
          quoting doesn't include bogus \012 and \015. */
@@ -148,12 +215,12 @@ ftp_request (const char *command, const char *value)
 }
 
 uerr_t
-ftp_greeting (int csock)
+ftp_greeting (int csock, FILE *conv_file)
 {
   uerr_t err = FTPOK;
   char *response = NULL;
 
-  err = ftp_response (csock, &response);
+  err = ftp_response (csock, &response, conv_file);
   if (err != FTPOK)
     goto bail;
   if (*response != '2')
@@ -166,8 +233,10 @@ bail:
 }
 /* Sends the USER and PASS commands to the server, to control
    connection socket csock.  */
+
 uerr_t
-ftp_login (int csock, const char *acc, const char *pass)
+ftp_login (int csock, const char *acc, const char *pass,
+            FILE *conv_file)
 {
   uerr_t err;
   char *request, *respline;
@@ -175,7 +244,8 @@ ftp_login (int csock, const char *acc, const char *pass)
 
   /* Send USER username.  */
   request = ftp_request ("USER", acc);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -183,7 +253,7 @@ ftp_login (int csock, const char *acc, const char *pass)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   /* An unprobable possibility of logging without a password.  */
@@ -239,7 +309,8 @@ ftp_login (int csock, const char *acc, const char *pass)
   xfree (respline);
   /* Send PASS password.  */
   request = ftp_request ("PASS", pass);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -247,7 +318,7 @@ ftp_login (int csock, const char *acc, const char *pass)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '2')
@@ -280,7 +351,7 @@ ip_address_to_port_repr (const ip_address *addr, int port, char *buf,
    server.  Use acceptport after RETR, to get the socket of data
    connection.  */
 uerr_t
-ftp_port (int csock, int *local_sock)
+ftp_port (int csock, int *local_sock, FILE *conv_file)
 {
   uerr_t err;
   char *request, *respline;
@@ -309,7 +380,8 @@ ftp_port (int csock, int *local_sock)
 
   /* Send PORT request.  */
   request = ftp_request ("PORT", bytes);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -319,7 +391,7 @@ ftp_port (int csock, int *local_sock)
   xfree (request);
 
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     {
       fd_close (*local_sock);
@@ -370,7 +442,7 @@ ip_address_to_lprt_repr (const ip_address *addr, int port, char *buf,
    server.  Use acceptport after RETR, to get the socket of data
    connection.  */
 uerr_t
-ftp_lprt (int csock, int *local_sock)
+ftp_lprt (int csock, int *local_sock, FILE *conv_file)
 {
   uerr_t err;
   char *request, *respline;
@@ -399,7 +471,8 @@ ftp_lprt (int csock, int *local_sock)
 
   /* Send PORT request.  */
   request = ftp_request ("LPRT", bytes);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -408,7 +481,7 @@ ftp_lprt (int csock, int *local_sock)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     {
       fd_close (*local_sock);
@@ -445,7 +518,7 @@ ip_address_to_eprt_repr (const ip_address *addr, int port, char *buf,
    server.  Use acceptport after RETR, to get the socket of data
    connection.  */
 uerr_t
-ftp_eprt (int csock, int *local_sock)
+ftp_eprt (int csock, int *local_sock, FILE *conv_file)
 {
   uerr_t err;
   char *request, *respline;
@@ -474,7 +547,8 @@ ftp_eprt (int csock, int *local_sock)
 
   /* Send PORT request.  */
   request = ftp_request ("EPRT", bytes);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -483,7 +557,7 @@ ftp_eprt (int csock, int *local_sock)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     {
       fd_close (*local_sock);
@@ -518,7 +592,7 @@ ftp_eprt (int csock, int *local_sock)
  * one. It will also return FTPNOAUTH if the target server does not support FTPS.
  */
 uerr_t
-ftp_auth (int csock, enum url_scheme scheme)
+ftp_auth (int csock, enum url_scheme scheme, FILE *conv_file)
 {
   uerr_t err = 0;
   int written = 0;
@@ -527,13 +601,14 @@ ftp_auth (int csock, enum url_scheme scheme)
   if (scheme == SCHEME_FTPS)
     {
       request = ftp_request ("AUTH", "TLS");
-      written = fd_write (csock, request, strlen (request), -1);
+      written = fd_write_with_file (csock, request, strlen (request), -1,
+                                conv_file);
       if (written < 0)
         {
           err = WRITEFAILED;
           goto bail;
         }
-      err = ftp_response (csock, &response);
+      err = ftp_response (csock, &response, conv_file);
       if (err != FTPOK)
         goto bail;
       if (*response != '2')
@@ -550,7 +625,7 @@ bail:
 }
 
 uerr_t
-ftp_pbsz (int csock, int pbsz)
+ftp_pbsz (int csock, int pbsz, FILE *conv_file)
 {
   uerr_t err = 0;
   int written = 0;
@@ -559,14 +634,15 @@ ftp_pbsz (int csock, int pbsz)
 
   snprintf (spbsz, 5, "%d", pbsz);
   request = ftp_request ("PBSZ", spbsz);
-  written = fd_write (csock, request, strlen (request), -1);
+  written = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (written < 0)
     {
       err = WRITEFAILED;
       goto bail;
     }
 
-  err = ftp_response (csock, &response);
+  err = ftp_response (csock, &response, conv_file);
   if (err != FTPOK)
     goto bail;
   if (*response != '2')
@@ -580,7 +656,7 @@ bail:
 }
 
 uerr_t
-ftp_prot (int csock, enum prot_level prot)
+ftp_prot (int csock, enum prot_level prot, FILE *conv_file)
 {
   uerr_t err = 0;
   int written = 0;
@@ -592,14 +668,15 @@ ftp_prot (int csock, enum prot_level prot)
   value[1] = '\0';
 
   request = ftp_request ("PROT", value);
-  written = fd_write (csock, request, strlen (request), -1);
+  written = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (written < 0)
     {
       err = WRITEFAILED;
       goto bail;
     }
 
-  err = ftp_response (csock, &response);
+  err = ftp_response (csock, &response, conv_file);
   if (err != FTPOK)
     goto bail;
   if (*response != '2')
@@ -617,7 +694,7 @@ bail:
    transfer.  Reads the response from server and parses it.  Reads the
    host and port addresses and returns them.  */
 uerr_t
-ftp_pasv (int csock, ip_address *addr, int *port)
+ftp_pasv (int csock, ip_address *addr, int *port, FILE *conv_file)
 {
   char *request, *respline, *s;
   int nwritten, i;
@@ -632,7 +709,8 @@ ftp_pasv (int csock, ip_address *addr, int *port)
   /* Form the request.  */
   request = ftp_request ("PASV", NULL);
   /* And send it.  */
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -640,7 +718,7 @@ ftp_pasv (int csock, ip_address *addr, int *port)
     }
   xfree (request);
   /* Get the server response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '2')
@@ -685,7 +763,7 @@ ftp_pasv (int csock, ip_address *addr, int *port)
    transfer.  Reads the response from server and parses it.  Reads the
    host and port addresses and returns them.  */
 uerr_t
-ftp_lpsv (int csock, ip_address *addr, int *port)
+ftp_lpsv (int csock, ip_address *addr, int *port, FILE *conv_file)
 {
   char *request, *respline, *s;
   int nwritten, i, af, addrlen, portlen;
@@ -702,7 +780,8 @@ ftp_lpsv (int csock, ip_address *addr, int *port)
   request = ftp_request ("LPSV", NULL);
 
   /* And send it.  */
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -711,7 +790,7 @@ ftp_lpsv (int csock, ip_address *addr, int *port)
   xfree (request);
 
   /* Get the server response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '2')
@@ -850,7 +929,7 @@ ftp_lpsv (int csock, ip_address *addr, int *port)
    transfer.  Reads the response from server and parses it.  Reads the
    host and port addresses and returns them.  */
 uerr_t
-ftp_epsv (int csock, ip_address *ip, int *port)
+ftp_epsv (int csock, ip_address *ip, int *port, FILE *conv_file)
 {
   char *request, *respline, *start, delim, *s;
   int nwritten, i;
@@ -868,7 +947,8 @@ ftp_epsv (int csock, ip_address *ip, int *port)
   request = ftp_request ("EPSV", (ip->family == AF_INET ? "1" : "2"));
 
   /* And send it.  */
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -877,7 +957,7 @@ ftp_epsv (int csock, ip_address *ip, int *port)
   xfree (request);
 
   /* Get the server response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '2')
@@ -942,7 +1022,7 @@ ftp_epsv (int csock, ip_address *ip, int *port)
 
 /* Sends the TYPE request to the server.  */
 uerr_t
-ftp_type (int csock, int type)
+ftp_type (int csock, int type, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -954,7 +1034,8 @@ ftp_type (int csock, int type)
   stype[1] = 0;
   /* Send TYPE request.  */
   request = ftp_request ("TYPE", stype);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -962,7 +1043,7 @@ ftp_type (int csock, int type)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '2')
@@ -978,7 +1059,7 @@ ftp_type (int csock, int type)
 /* Changes the working directory by issuing a CWD command to the
    server.  */
 uerr_t
-ftp_cwd (int csock, const char *dir)
+ftp_cwd (int csock, const char *dir, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -986,7 +1067,8 @@ ftp_cwd (int csock, const char *dir)
 
   /* Send CWD request.  */
   request = ftp_request ("CWD", dir);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -994,7 +1076,7 @@ ftp_cwd (int csock, const char *dir)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline == '5')
@@ -1014,14 +1096,15 @@ ftp_cwd (int csock, const char *dir)
 
 /* Sends REST command to the FTP server.  */
 uerr_t
-ftp_rest (int csock, wgint offset)
+ftp_rest (int csock, wgint offset, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
   uerr_t err;
 
   request = ftp_request ("REST", number_to_static_string (offset));
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -1029,7 +1112,7 @@ ftp_rest (int csock, wgint offset)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline != '3')
@@ -1044,7 +1127,7 @@ ftp_rest (int csock, wgint offset)
 
 /* Sends RETR command to the FTP server.  */
 uerr_t
-ftp_retr (int csock, const char *file)
+ftp_retr (int csock, const char *file, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -1052,7 +1135,8 @@ ftp_retr (int csock, const char *file)
 
   /* Send RETR request.  */
   request = ftp_request ("RETR", file);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -1060,7 +1144,7 @@ ftp_retr (int csock, const char *file)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline == '5')
@@ -1082,7 +1166,7 @@ ftp_retr (int csock, const char *file)
    `LIST' (no space).  */
 uerr_t
 ftp_list (int csock, const char *file, bool avoid_list_a, bool avoid_list,
-          bool *list_a_used)
+          bool *list_a_used, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -1113,7 +1197,8 @@ ftp_list (int csock, const char *file, bool avoid_list_a, bool avoid_list,
   do {
     /* Send request.  */
     request = ftp_request (list_commands[i], file);
-    nwritten = fd_write (csock, request, strlen (request), -1);
+    nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                              conv_file);
     if (nwritten < 0)
       {
         xfree (request);
@@ -1121,7 +1206,7 @@ ftp_list (int csock, const char *file, bool avoid_list_a, bool avoid_list,
       }
     xfree (request);
     /* Get appropriate response.  */
-    err = ftp_response (csock, &respline);
+    err = ftp_response (csock, &respline, conv_file);
     if (err == FTPOK)
       {
         if (*respline == '5')
@@ -1155,7 +1240,8 @@ ftp_list (int csock, const char *file, bool avoid_list_a, bool avoid_list,
 
 /* Sends the SYST command to the server. */
 uerr_t
-ftp_syst (int csock, enum stype *server_type, enum ustype *unix_type)
+ftp_syst (int csock, enum stype *server_type, enum ustype *unix_type,
+          FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -1164,7 +1250,8 @@ ftp_syst (int csock, enum stype *server_type, enum ustype *unix_type)
 
   /* Send SYST request.  */
   request = ftp_request ("SYST", NULL);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -1173,7 +1260,7 @@ ftp_syst (int csock, enum stype *server_type, enum ustype *unix_type)
   xfree (request);
 
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline == '5')
@@ -1226,7 +1313,7 @@ ftp_syst (int csock, enum stype *server_type, enum ustype *unix_type)
 
 /* Sends the PWD command to the server. */
 uerr_t
-ftp_pwd (int csock, char **pwd)
+ftp_pwd (int csock, char **pwd, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -1234,7 +1321,8 @@ ftp_pwd (int csock, char **pwd)
 
   /* Send PWD request.  */
   request = ftp_request ("PWD", NULL);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -1242,7 +1330,7 @@ ftp_pwd (int csock, char **pwd)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     return err;
   if (*respline == '5')
@@ -1271,10 +1359,80 @@ ftp_pwd (int csock, char **pwd)
   return FTPOK;
 }
 
+/* Sends the FEAT command to the server. */
+uerr_t
+ftp_general (int csock, const char *command, FILE *conv_file)
+{
+  char *request, *respline;
+  int nwritten;
+  uerr_t err;
+
+  /* Send FEAT request.  */
+  request = ftp_request (command, NULL);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
+  if (nwritten < 0)
+    {
+      xfree (request);
+      return WRITEFAILED;
+    }
+  xfree (request);
+
+  /* Get appropriate response.  */
+  err = ftp_response (csock, &respline, conv_file);
+  if (err != FTPOK)
+    return err;
+  if (*respline != '2')
+    {
+    err:
+      xfree (respline);
+      return FTPSRVERR;
+    }
+
+  xfree (respline);
+  /* All OK.  */
+  return FTPOK;
+}
+
+/* Sends the FEAT command to the server. */
+uerr_t
+ftp_feat (int csock, FILE *conv_file)
+{
+  return ftp_general (csock, "FEAT", conv_file);
+}
+
+/* Sends the QUIT command to the server. */
+uerr_t
+ftp_quit (int csock, FILE *conv_file)
+{
+  return ftp_general (csock, "QUIT", conv_file);
+}
+
+/* Sends the HELP command to the server. */
+uerr_t
+ftp_help (int csock, FILE *conv_file)
+{
+  return ftp_general (csock, "HELP", conv_file);
+}
+
+/* Sends the STAT command to the server. */
+uerr_t
+ftp_stat (int csock, FILE *conv_file)
+{
+  return ftp_general (csock, "STAT", conv_file);
+}
+
+/* Sends the NOOP command to the server. */
+uerr_t
+ftp_noop (int csock, FILE *conv_file)
+{
+  return ftp_general (csock, "NOOP", conv_file);
+}
+
 /* Sends the SIZE command to the server, and returns the value in 'size'.
  * If an error occurs, size is set to zero. */
 uerr_t
-ftp_size (int csock, const char *file, wgint *size)
+ftp_size (int csock, const char *file, wgint *size, FILE *conv_file)
 {
   char *request, *respline;
   int nwritten;
@@ -1282,7 +1440,8 @@ ftp_size (int csock, const char *file, wgint *size)
 
   /* Send PWD request.  */
   request = ftp_request ("SIZE", file);
-  nwritten = fd_write (csock, request, strlen (request), -1);
+  nwritten = fd_write_with_file (csock, request, strlen (request), -1,
+                            conv_file);
   if (nwritten < 0)
     {
       xfree (request);
@@ -1291,7 +1450,7 @@ ftp_size (int csock, const char *file, wgint *size)
     }
   xfree (request);
   /* Get appropriate response.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, conv_file);
   if (err != FTPOK)
     {
       *size = 0;

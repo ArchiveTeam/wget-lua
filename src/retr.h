@@ -31,6 +31,8 @@ as that of the covered work.  */
 #ifndef RETR_H
 #define RETR_H
 
+#include "hash.h"
+#include "luahooks.h"
 #include "url.h"
 
 extern int numurls;
@@ -62,8 +64,10 @@ char *fd_read_hunk (int, hunk_terminator_t, long, long);
 char *fd_read_line (int);
 
 uerr_t retrieve_url (struct url *, const char *, char **, char **,
-                     const char *, int *, bool, struct iri *, bool);
-uerr_t retrieve_from_file (const char *, bool, int *);
+                     const char *, int *, bool, struct iri *, bool,
+                     struct hash_table *, struct luahooks_url **);
+uerr_t retrieve_from_file (const char *, bool, int *,
+                     struct hash_table *, struct luahooks_url **);
 
 const char *retr_rate (wgint, double);
 double calc_rate (wgint, double, int *);

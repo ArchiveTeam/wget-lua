@@ -477,6 +477,7 @@ static struct cmdline_option option_data[] =
     { "warc-dedup", 0, OPT_VALUE, "warccdxdedup", -1 },
     { "warc-dedup-disable", 0, OPT_BOOLEAN, "warcdedupdisable", -1 },
     { "warc-dedup-min-size", 0, OPT_VALUE, "warcdedupminsize", -1 },
+    { "warc-dedup-scheme-agnostic", 0, OPT_BOOLEAN, "warcdedupschemeagnostic", -1 },
     { "warc-dedup-url-agnostic", 0, OPT_BOOLEAN, "warcdedupurlagnostic", -1 },
     { "warc-digests", 0, OPT_BOOLEAN, "warcdigests", -1 },
     { "warc-file", 0, OPT_VALUE, "warcfile", -1 },
@@ -485,6 +486,7 @@ static struct cmdline_option option_data[] =
     { "warc-max-size", 0, OPT_VALUE, "warcmaxsize", -1 },
     { "warc-tempdir", 0, OPT_VALUE, "warctempdir", -1 },
     { "warc-item-name", 0, OPT_VALUE, "warcitemname", -1 },
+    { "warc-ftp-html-conversion", 0, OPT_BOOLEAN, "warcftphtmlconversion", -1 },
 #ifdef USE_WATT32
     { "wdebug", 0, OPT_BOOLEAN, "wdebug", -1 },
 #endif
@@ -1004,6 +1006,8 @@ WARC options:\n"),
     N_("\
        --warc-dedup-url-agnostic        perform URL-agnostic deduplication of WARC records\n"),
     N_("\
+       --warc-dedup-scheme-agnostic     perform scheme-agnostic deduplication of WARC records\n"),
+    N_("\
        --warc-dedup-min-size=NUMBER     minimum payload size to perform deduplication\n\
                                           (default number of 100)\n"),
 #if defined(HAVE_LIBZ) || defined(HAVE_ZSTD)
@@ -1027,6 +1031,9 @@ WARC options:\n"),
     N_("\
        --warc-tempdir=DIRECTORY         location for temporary files created by the\n\
                                           WARC writer\n"),
+    N_("\
+       --warc-ftp-html-conversion       store the HTML-ized FTP listing as conversion\n\
+                                          record in the WARC file\n"),
     "\n",
 
     N_("\
@@ -1882,6 +1889,15 @@ for details.\n\n"));
         }
     }
 
+  if (opt.warc_dedup_scheme_agnostic
+      && !opt.warc_dedup_url_agnostic)
+    {
+      fprintf (stderr,
+               _("Option --warc-dedup-scheme-agnostic does not work without "
+                 "--warc-dedup-url-agnostic.\n"));
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+
 #ifdef HAVE_LIBZ
   if (opt.always_rest || opt.start_pos >= 0)
     {
@@ -2372,11 +2388,7 @@ only if outputting to a regular file.\n"));
               use_askpass (url_parsed);
 
             if ((opt.recursive || opt.page_requisites)
-                && ((url_scheme (t) != SCHEME_FTP
-  #ifdef HAVE_SSL
-                && url_scheme (t) != SCHEME_FTPS
-  #endif
-                )
+                && (true // allow FTP and FTPS
                     || url_uses_proxy (url_parsed)))
               {
                 int old_follow_ftp = opt.follow_ftp;
@@ -2396,7 +2408,7 @@ only if outputting to a regular file.\n"));
             else
               {
                 retrieve_url (url_parsed, t, &filename, &redirected_URL, NULL,
-                              &dt, opt.recursive, iri, true);
+                              &dt, opt.recursive, iri, true, NULL, NULL);
               }
 
             if (opt.delete_after && filename != NULL && file_exists_p (filename, NULL))
@@ -2424,7 +2436,8 @@ only if outputting to a regular file.\n"));
     {
       int count;
       int status;
-      status = retrieve_from_file (opt.input_filename, opt.force_html, &count);
+      status = retrieve_from_file (opt.input_filename, opt.force_html, &count,
+                                   NULL, NULL);
       inform_exit_status (status);
       if (!count)
         logprintf (LOG_NOTQUIET, _("No URLs found in %s.\n"),

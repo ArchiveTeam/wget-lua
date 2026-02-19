@@ -50,6 +50,8 @@ as that of the covered work.  */
 #include "convert.h"            /* for downloaded_file */
 #include "recur.h"              /* for INFINITE_RECURSION */
 #include "warc.h"
+#include "luahooks.h"
+#include "hash.h"
 #include "c-strcase.h"
 #ifdef ENABLE_XATTR
 #include "xattr.h"
@@ -119,7 +121,7 @@ ftp_expected_bytes (const char *s)
  * It is merely a wrapper around ftp_epsv, ftp_lpsv and ftp_pasv.
  */
 static uerr_t
-ftp_do_pasv (int csock, ip_address *addr, int *port)
+ftp_do_pasv (int csock, ip_address *addr, int *port, FILE *warc_conv_tmp)
 {
   uerr_t err;
 
@@ -137,19 +139,19 @@ ftp_do_pasv (int csock, ip_address *addr, int *port)
     case AF_INET:
       if (!opt.server_response)
         logputs (LOG_VERBOSE, "==> PASV ... ");
-      err = ftp_pasv (csock, addr, port);
+      err = ftp_pasv (csock, addr, port, warc_conv_tmp);
       break;
     case AF_INET6:
       if (!opt.server_response)
         logputs (LOG_VERBOSE, "==> EPSV ... ");
-      err = ftp_epsv (csock, addr, port);
+      err = ftp_epsv (csock, addr, port, warc_conv_tmp);
 
       /* If EPSV is not supported try LPSV */
       if (err == FTPNOPASV)
         {
           if (!opt.server_response)
             logputs (LOG_VERBOSE, "==> LPSV ... ");
-          err = ftp_lpsv (csock, addr, port);
+          err = ftp_lpsv (csock, addr, port, warc_conv_tmp);
         }
       break;
     default:
@@ -164,7 +166,7 @@ ftp_do_pasv (int csock, ip_address *addr, int *port)
  * It is merely a wrapper around ftp_eprt, ftp_lprt and ftp_port.
  */
 static uerr_t
-ftp_do_port (int csock, int *local_sock)
+ftp_do_port (int csock, int *local_sock, FILE *warc_conv_tmp)
 {
   uerr_t err;
   ip_address cip;
@@ -180,19 +182,19 @@ ftp_do_port (int csock, int *local_sock)
     case AF_INET:
       if (!opt.server_response)
         logputs (LOG_VERBOSE, "==> PORT ... ");
-      err = ftp_port (csock, local_sock);
+      err = ftp_port (csock, local_sock, warc_conv_tmp);
       break;
     case AF_INET6:
       if (!opt.server_response)
         logputs (LOG_VERBOSE, "==> EPRT ... ");
-      err = ftp_eprt (csock, local_sock);
+      err = ftp_eprt (csock, local_sock, warc_conv_tmp);
 
       /* If EPRT is not supported try LPRT */
       if (err == FTPPORTERR)
         {
           if (!opt.server_response)
             logputs (LOG_VERBOSE, "==> LPRT ... ");
-          err = ftp_lprt (csock, local_sock);
+          err = ftp_lprt (csock, local_sock, warc_conv_tmp);
         }
       break;
     default:
@@ -203,19 +205,19 @@ ftp_do_port (int csock, int *local_sock)
 #else
 
 static uerr_t
-ftp_do_pasv (int csock, ip_address *addr, int *port)
+ftp_do_pasv (int csock, ip_address *addr, int *port, FILE *warc_conv_tmp)
 {
   if (!opt.server_response)
     logputs (LOG_VERBOSE, "==> PASV ... ");
-  return ftp_pasv (csock, addr, port);
+  return ftp_pasv (csock, addr, port, warc_conv_tmp);
 }
 
 static uerr_t
-ftp_do_port (int csock, int *local_sock)
+ftp_do_port (int csock, int *local_sock, FILE *warc_conv_tmp)
 {
   if (!opt.server_response)
     logputs (LOG_VERBOSE, "==> PORT ... ");
-  return ftp_port (csock, local_sock);
+  return ftp_port (csock, local_sock, warc_conv_tmp);
 }
 #endif
 
@@ -238,30 +240,549 @@ print_length (wgint size, wgint start, bool authoritative)
   logputs (LOG_VERBOSE, !authoritative ? _(" (unauthoritative)\n") : "\n");
 }
 
-static uerr_t ftp_get_listing (struct url *, struct url *, ccon *, struct fileinfo **);
+static uerr_t ftp_get_listing (struct url *, struct url *, ccon *, struct fileinfo **, struct warc_context *, struct hash_table *, struct luahooks_url **);
+
+/* Write an event message to the WARC control connection fp using host
+   and port. */
+int
+write_control_message_host_port (char *str, const char *host, int port,
+                                 char *extra, FILE *warc_conv_tmp)
+{
+  uerr_t err = RETROK;
+
+  if (warc_conv_tmp == NULL)
+    return err;
+
+  char port_str[6], *msg;
+
+  if (extra == NULL)
+    extra = "";
+
+  port = sprintf (port_str, "%d", port);
+  msg = concat_strings (str, " ", host, ":", port_str, extra, "\r\n", (char *) 0);
+
+  if (write_control_message_event (msg, -1, warc_conv_tmp) < 0)
+    err = WARC_TMP_FWRITEERR;
+
+  xfree (msg);
+
+  return err;
+}
+
+/* Get the ip and port using a socket, it is also determined if this is
+   an IPv6 address or not. */
+uerr_t
+socket_to_string (char **ip_s, char **port_s, bool *is_ipv6, int sock)
+{
+  struct sockaddr_storage addr;
+  char port_str[6], ip_str[64], s;
+  socklen_t len = sizeof (addr);
+
+  if (getpeername (sock, (struct sockaddr*)&addr, &len) < 0
+      || getnameinfo((struct sockaddr *)&addr, len, ip_str, sizeof(ip_str),
+              port_str, sizeof(port_str), NI_NUMERICHOST | NI_NUMERICSERV) != 0)
+    return CONSOCKERR;
+
+  *ip_s = xstrdup (ip_str);
+  *port_s = xstrdup (port_str);
+
+  if (addr.ss_family == AF_INET)
+    *is_ipv6 = false;
+  else if (addr.ss_family == AF_INET6)
+    *is_ipv6 = true;
+  else
+    abort();
+
+  return RETROK;
+}
+
+/* Write a control message to the WARC control connection fp. */
+int
+write_control_message_sock (char *str, char **ip_s, int *port_d, int sock,
+                            char *extra, FILE *warc_conv_tmp)
+{
+  uerr_t err = RETROK;
+
+  if (warc_conv_tmp == NULL)
+    return err;
+
+  uerr_t err_tmp;
+  char *ip_str, *port_str, *msg;
+  bool is_ipv6 = true;
+
+  if (extra == NULL)
+    extra = "";
+
+  err_tmp = socket_to_string (&ip_str, &port_str, &is_ipv6, sock);
+  if (err_tmp != RETROK)
+    return err_tmp;
+
+  if (ip_s != NULL)
+    *ip_s = xstrdup (ip_str);
+  if (port_d != NULL)
+    *port_d = atoi (port_str);
+
+  msg = concat_strings (str, " ", is_ipv6 ? "[" : "", ip_str, is_ipv6 ? "]" : "",
+                        ":", port_str, extra, "\r\n", (char *) 0);
+
+  if (write_control_message_event (msg, -1, warc_conv_tmp) < 0)
+    err = WARC_TMP_FWRITEERR;
+
+  xfree (msg);
+  xfree (ip_str);
+  xfree (port_str);
+
+  return err;
+}
+
+/* Close a control connection and/or data connection, and write a an
+   event message about the closing of the socket to the control connection
+   filepointer. */
+static uerr_t
+close_sock (int csock, int dtsock, ccon *con, FILE *warc_conv_tmp,
+            uerr_t err_orig)
+{
+  uerr_t err = FTPOK;
+  char *ip_s;
+  int port;
+
+  /* If the error is one that signals a problem, a string of the message
+     if created to print to the control conversation record. */
+  bool bad_error = (err_orig != FTPOK && err_orig != RETRFINISHED && err_orig != RETROK);
+  char *err_message = NULL;
+  if (bad_error)
+    err_message = concat_strings ("An error occurred: ", uerr_to_string (err_orig), "\r\n", (char *) 0);
+
+  /* Close the data connection if given. */
+  if (dtsock != 0)
+    {
+      if (bad_error
+          && write_control_message_event (err_message, -1, warc_conv_tmp) < 0)
+        err = WARC_TMP_FWRITEERR;
+
+      /* An event message is written on closing and on having closed the
+         socket. This looks redundant, but is being written now to support
+         this message in the future in case of any checks on closing the
+         connection in the future. */
+      err = write_control_message_sock ("Closing data connection to", &ip_s,
+                                        &port, dtsock, NULL, warc_conv_tmp);
+      fd_close (dtsock);
+      if (err != RETROK)
+        return err;
+      err = write_control_message_host_port ("Closed data connection to", ip_s,
+                                             port, NULL, warc_conv_tmp);
+      if (err != RETROK)
+        return err;
+
+      if (warc_conv_tmp != NULL)
+        {
+          xfree (ip_s);
+          ip_s = NULL;
+        }
+    }
+
+  /* Close the control connection if given. */
+  if (csock != 0)
+    {
+      /* If the error is not printed before, print it now. */
+      if (!bad_error)
+        {
+          if (opt.warc_filename != NULL)
+            {
+              if (!opt.server_response)
+                logprintf (LOG_VERBOSE, "==> QUIT ... ");
+              err = ftp_quit (csock, warc_conv_tmp);
+            }
+        }
+      else if (dtsock == 0
+               && write_control_message_event (err_message, -1, warc_conv_tmp) < 0)
+        err = WARC_TMP_FWRITEERR;
+
+      err = write_control_message_sock ("Closing control connection to", &ip_s,
+                                        &port, csock, NULL, warc_conv_tmp);
+      fd_close (csock);
+      con->csock = -1;
+      if (err != RETROK)
+        return err;
+      err = write_control_message_host_port ("Closed control connection to",
+                                             ip_s, port, NULL, warc_conv_tmp);
+      if (err != RETROK)
+        return err;
+
+      if (warc_conv_tmp != NULL)
+        xfree (ip_s);
+    }
+
+  if (err_message != NULL)
+    xfree (err_message);
+
+  return err_orig;
+}
 
 static uerr_t
-get_ftp_greeting (int csock, ccon *con)
+get_ftp_greeting (int csock, ccon *con, FILE *warc_conv_tmp)
 {
   uerr_t err = 0;
 
   /* Get the server's greeting */
-  err = ftp_greeting (csock);
+  err = ftp_greeting (csock, warc_conv_tmp);
   if (err != FTPOK)
     {
       logputs (LOG_NOTQUIET, "Error in server response. Closing.\n");
-      fd_close (csock);
-      con->csock = -1;
+      err = close_sock (csock, 0, con, warc_conv_tmp, err);
     }
 
   return err;
 }
 
-#ifdef HAVE_SSL
+/* Writes a metadata WARC record for the control conversation. Since the
+   state of the control connection depends on the previous metadata
+   records with commands, the ID of the first record in the session is
+   mentioned in the WARC headers, and the number in the session of the
+   current record. */
 static uerr_t
-init_control_ssl_connection (int csock, struct url *u, bool *using_control_security)
+write_warc_cconv (struct warc_context *warc_context, ccon *con)
+{
+  uerr_t err_tmp;
+  const char *warc_protocol[3] = {NULL};
+  char *url;
+
+  /* If the control connection is still open, mention it is kept. */
+  if (con->csock != -1)
+    {
+      err_tmp = write_control_message_sock ("Kept control connection to", NULL,
+                                            NULL, con->csock, NULL,
+                                            warc_context->ccon_fp);
+      if (err_tmp != RETROK)
+        return err_tmp;
+    }
+
+  /* Copy the WARC record ID of the current control conversation record
+     as the origin record ID if not set yet. */
+  if (warc_context->number == 0)
+    {
+      strncpy (warc_context->origin_id_uuid, warc_context->concurrent_to_uuid,
+               sizeof (warc_context->origin_id_uuid));
+      /* The count of the metadata records is increased from 0 to 1,
+         the starting value. */
+      warc_context->number++;
+    }
+
+  warc_protocol[0] = "ftp";
+  if (warc_context->csock_protocol != secure_protocol_none)
+    warc_protocol[1] = warc_protocol_to_string (warc_context->csock_protocol);
+  else
+    warc_protocol[1] = NULL;
+
+  url = url_string (warc_context->url, URL_AUTH_SHOW);
+
+  /* Write the current control conversation record. */
+  if (warc_context->concurrent_to_uuid == NULL
+      || fflush (warc_context->ccon_fp) != 0
+      || (warc_context->is_list == 1
+          && url[strlen(url)-1] != '/')
+      || !warc_write_metadata_record (warc_context->concurrent_to_uuid,
+                                      url, NULL,
+                                      NULL, &warc_context->ip_addr,
+                                      "text/x-ftp-control-conversation",
+                                      warc_context->ccon_fp, -1,
+                                      warc_protocol, warc_context->csock_cipher_name,
+                                      warc_context->origin_id_uuid,
+                                      warc_context->number))
+    return WARC_ERR;
+
+  xfree (url);
+
+  /* The control conversation file pointer is already closed after writing. */
+  warc_context->ccon_fp = NULL;
+  warc_context->number++;
+
+  return RETROK;
+}
+
+/* Rotate the current control conversation record. This writes the record
+   and opens a new file for the next record. */
+static uerr_t
+rotate_warc_cconv (struct warc_context *warc_context, ccon *con)
+{
+  uerr_t err;
+
+  err = write_warc_cconv (warc_context, con);
+  if (err != RETROK)
+    return err;
+
+  // clear_warc_context (warc_context);
+  warc_context->ccon_fp = warc_tempfile ();
+  if (warc_context->ccon_fp == NULL)
+    return WARC_TMP_FOPENERR;
+
+  return RETROK;
+}
+
+/* Write the WARC resource record holding the contents of the data
+   retrieved in the context of the current log of the control conversation.
+
+   The data in the resource record can be either a file or a directory
+   listing. A file is written with Content-Type text/plain, while a
+   directory is written with Content-Type application/octet-stream.
+
+   In case of a directory listing, an HTML-ized version is written as well if
+   available. This is stored as conversion record referring to the resource
+   record. */
+static uerr_t
+write_warc_resource (struct warc_context *warc_context, ccon *con)
+{
+  const char *warc_protocol[3] = {NULL};
+  char *url;
+
+  /* Check if anything was actually written. */
+  if (!warc_context->written_resource)
+    {
+      fclose (warc_context->fp);
+      return RETROK;
+    }
+
+  warc_protocol[0] = "ftp";
+  if (warc_context->dtsock_protocol != secure_protocol_none)
+    warc_protocol[1] = warc_protocol_to_string (warc_context->dtsock_protocol);
+  else
+    warc_protocol[1] = NULL;
+
+  url = url_string (warc_context->url, URL_AUTH_SHOW);
+
+  bool write_to_warc = luahooks_write_to_warc_ftp (warc_context->url, warc_context->hstatp);
+
+  /* Write the resource record. Here, the IP of the data connection is
+     used, as this is where the data in the resource record came in from.
+     The metadata control conversation record will have the IP address
+     connected to the control conversation only.
+
+     In most cases, the control and data connection IPs will be the same. */
+  if (fflush (warc_context->fp) != 0
+      || (warc_context->is_list == 1
+          && url[strlen(url)-1] != '/')
+      || (write_to_warc
+          && !warc_write_resource_record (warc_context->record_id_uuid,
+                                      url, NULL,
+                                      warc_context->concurrent_to_uuid,
+                                      &warc_context->ip_addr_data,
+                                      warc_context->is_list == 1 ? "text/plain" : "application/octet-stream",
+                                      warc_context->fp, 0,
+                                      warc_protocol, warc_context->dtsock_cipher_name)))
+    return WARC_ERR;
+
+  /* The record was not written, so the file was not closed. */
+  if (!write_to_warc)
+    fclose (warc_context->fp);
+
+  warc_context->dtsock_protocol = secure_protocol_none;
+  warc_context->dtsock_cipher_name = NULL;
+  warc_context->fp = NULL;
+  memset (&warc_context->ip_addr_data, 0, sizeof (ip_address));
+
+  /* Write a HTML-ized directory listing if available. */
+  if (warc_context->html_fp != NULL)
+    {
+      if (!warc_context->is_list)
+        return WARC_ERR;
+
+      if (fflush (warc_context->html_fp) != 0
+          || (write_to_warc
+              && !warc_write_conversion_record (NULL, url, NULL,
+                                    warc_context->record_id_uuid, "text/html",
+                                    warc_context->html_fp)))
+        return WARC_TMP_FWRITEERR;
+
+      if (!write_to_warc)
+        fclose (warc_context->html_fp);
+
+      warc_context->html_fp = NULL;
+    }
+
+  xfree (url);
+
+  return RETROK;
+}
+
+/* Write the current WARC resource record, and prepare for a new record. */
+static uerr_t
+rotate_warc_resource (struct warc_context *warc_context, ccon *con)
+{
+  if (warc_context->fp != NULL)
+    {
+      if (write_warc_resource (warc_context, con) != RETROK)
+        return WARC_ERR;
+
+      warc_context->fp = warc_tempfile ();
+      if (warc_context->fp == NULL)
+        return WARC_TMP_FOPENERR;
+    }
+
+  return RETROK;
+}
+
+/* Write the URL for the WARC records. URL u->url can not be used here due
+   to how the LIST command is used, see below. */
+static uerr_t
+warc_context_set_url (struct warc_context *warc_context, ccon *con,
+                      struct url *u)
+{
+  char *tmp_url_file;
+
+  /* No URL should be set yet. */
+  if (warc_context->url != NULL)
+    return WARC_ERR;
+
+  /* Keep track on if this is list command or not. */
+  if (con->cmd & DO_LIST)
+    warc_context->is_list = 1;
+  else
+    warc_context->is_list = 0;
+
+  warc_context->url = url_copy (u);
+
+  /* Wget attempts to retrieve the directory of an FTP file
+     in certain situations, while keeping u->url equal to
+     the original input. We can therefore not use u->url for
+     the WARC records of this retrieved directory.
+
+     The LIST command is used when flag DO_LIST is set. If
+     DO_LIST is set, directory u->dir is downloaded, while
+     u->file is not used. If u->file is set though, this
+     filename will be reflected in u->url, which would be
+     the wrong URL for the WARC records. In that case a new
+     URL needs to be built for the WARC records. */
+  if (warc_context->is_list == 1)
+    {
+      /* The RETR and LIST commands should not be both performed.
+         This should not be set, an extra check on this. */
+      if (con->cmd & DO_RETR)
+        return WARC_ERR;
+
+      url_set_file (warc_context->url, "");
+    }
+
+  return RETROK;
+}
+
+/* Rotate the current WARC context. The WARC records are written out and
+   a new warc_context is prepared. The URL is stored at this point as
+   well. */
+static uerr_t
+rotate_warc_context (struct warc_context *warc_context, ccon *con, struct url *u,
+                     bool no_reset_context)
+{
+  uerr_t err;
+
+  /* Write new UUIDs for the resource and metadata records. These are
+     written right before writing the WARC records. */
+  warc_uuid_str (warc_context->record_id_uuid,
+                 sizeof (warc_context->record_id_uuid));
+  warc_uuid_str (warc_context->concurrent_to_uuid,
+                 sizeof (warc_context->concurrent_to_uuid));
+
+  /* Write out the WARC records. */
+  err = rotate_warc_resource (warc_context, con);
+  if (err != RETROK)
+    return err;
+
+  err = rotate_warc_cconv (warc_context, con);
+  if (err != RETROK)
+    return err;
+
+  if (!no_reset_context)
+    {
+      /* Reset data. The file pointers are already rotated right after writing
+         the WARC records. */
+      warc_context->is_list = -1;
+      warc_context->written_resource = false;
+      if (warc_context->hstatp != NULL)
+        {
+          xfree (warc_context->hstatp->rderrmsg);
+          xfree (warc_context->hstatp->message);
+          xfree (warc_context->hstatp);
+        }
+      warc_context->hstatp = xnew0 (struct http_stat_partial);
+      warc_context->fileinfo = NULL;
+      url_free (warc_context->url);
+      warc_context->url = NULL;
+      memset (&warc_context->ip_addr, 0, sizeof (ip_address));
+
+      /* Set the new URL. */
+      err = warc_context_set_url (warc_context, con, u);
+      if (err != RETROK)
+        return err;
+    }
+
+  /* The UUIDs were only required for writing the previous records.
+     The warc_context->origin_id_uuid should not be cleared as this holds
+     the UUID of the first control conversation record. */
+  xzero (warc_context->record_id_uuid);
+  xzero (warc_context->concurrent_to_uuid);
+
+  return RETROK;
+}
+
+/* Create the warc_context. Create file pointers, and set the URL. */
+static uerr_t
+create_warc_context (struct warc_context *warc_context, ccon *con, struct url *u)
+{
+  uerr_t err;
+
+  xzero (*warc_context);
+
+  warc_context->fp = warc_tempfile ();
+  warc_context->ccon_fp = warc_tempfile ();
+  if (warc_context->fp == NULL || warc_context->ccon_fp == NULL)
+    return WARC_TMP_FOPENERR;
+
+  warc_context->is_list = -1;
+  warc_context->written_resource = false;
+
+  warc_context->csock_protocol = secure_protocol_none;
+  warc_context->csock_cipher_name = NULL;
+  warc_context->dtsock_protocol = secure_protocol_none;
+  warc_context->dtsock_cipher_name = NULL;
+
+  warc_context->hstatp = xnew0 (struct http_stat_partial);
+
+  err = warc_context_set_url (warc_context, con, u);
+  if (err != RETROK)
+    return err;
+
+  return RETROK;
+}
+
+#ifdef HAVE_SSL
+/* Write an event message about actions on an SSL handshake or session.
+   This could also be a session continued by another connection. */
+static uerr_t
+write_control_message_ssl_connection (char *initial, int csock, struct url *u,
+                                      FILE *warc_conv_tmp)
+{
+  uerr_t err = RETROK;
+
+  if (warc_conv_tmp == NULL)
+    return err;
+
+  char *tmp1 = concat_strings (initial, " SSL handshake on", (char *) 0);
+  char *tmp2 = concat_strings (" for host ", u->host, (char *) 0);
+
+  err = write_control_message_sock (tmp1, NULL, NULL, csock, tmp2, warc_conv_tmp);
+
+  xfree (tmp1);
+  xfree (tmp2);
+
+  return err;
+}
+
+static uerr_t
+init_control_ssl_connection (int csock, struct url *u, bool *using_control_security,
+                             ccon *con, FILE *warc_conv_tmp,
+                             struct warc_context *warc_context)
 {
   bool using_security = false;
+  uerr_t err;
 
   /* If '--ftps-implicit' was passed, perform the SSL handshake directly,
    * and do not send an AUTH command.
@@ -270,17 +791,46 @@ init_control_ssl_connection (int csock, struct url *u, bool *using_control_secur
    */
   if (!opt.ftps_implicit && !opt.server_response)
     logputs (LOG_VERBOSE, "==> AUTH TLS ... ");
-  if (opt.ftps_implicit || ftp_auth (csock, SCHEME_FTPS) == FTPOK)
+  if (opt.ftps_implicit || ftp_auth (csock, SCHEME_FTPS, warc_conv_tmp) == FTPOK)
     {
+      if (write_control_message_ssl_connection ("Performing", csock, u,
+                                                warc_conv_tmp) != RETROK)
+        return WARC_TMP_FWRITEERR;
       if (!ssl_connect_wget (csock, u->host, NULL))
         {
-          fd_close (csock);
-          return CONSSLERR;
+          if (write_control_message_ssl_connection ("Failed to perform", csock,
+                                                    u, warc_conv_tmp) != RETROK)
+            return WARC_TMP_FWRITEERR;
+          return close_sock (csock, 0, con, warc_conv_tmp, CONSSLERR);
         }
-      else if (!ssl_check_certificate (csock, u->host))
+
+      if (opt.warc_filename != NULL)
         {
-          fd_close (csock);
-          return VERIFCERTERR;
+          err = rotate_warc_context (warc_context, con, u, true);
+          if (err != RETROK)
+            return err;
+        }
+
+      err = write_control_message_sock ("Reusing control connection to", NULL,
+                                            NULL, csock, NULL, warc_context->ccon_fp);
+      if (err != RETROK)
+        return err;
+
+      if (opt.warc_filename != NULL)
+        {
+          warc_context->csock_protocol = ssl_get_protocol (csock);
+          if (warc_context->csock_protocol == secure_protocol_none)
+            return close_sock (csock, 0, con, warc_conv_tmp, CONSSLERR);
+          warc_context->csock_cipher_name = ssl_get_cipher_name (csock);
+        }
+
+      if (write_control_message_ssl_connection ("Performed", csock, u,
+                                                warc_conv_tmp) != RETROK)
+        return WARC_TMP_FWRITEERR;
+
+      if (!ssl_check_certificate (csock, u->host))
+        {
+          return close_sock (csock, 0, con, warc_conv_tmp, VERIFCERTERR);
         }
 
       if (!opt.ftps_implicit && !opt.server_response)
@@ -302,8 +852,7 @@ init_control_ssl_connection (int csock, struct url *u, bool *using_control_secur
         }
       else
         {
-          fd_close (csock);
-          return FTPNOAUTH;
+          return close_sock (csock, 0, con, warc_conv_tmp, FTPNOAUTH);
         }
     }
 
@@ -314,18 +863,20 @@ init_control_ssl_connection (int csock, struct url *u, bool *using_control_secur
 
 /* Retrieves a file with denoted parameters through opening an FTP
    connection to the server.  It always closes the data connection,
-   and closes the control connection in case of error.  If warc_tmp
-   is non-NULL, the downloaded data will be written there as well.  */
+   and closes the control connection in case of error.  If the data
+   is to be written to a WARC, the control conversation will be written
+   to ccon_fp in warc_context.  */
 static uerr_t
 getftp (struct url *u, struct url *original_url,
         wgint passed_expected_bytes, wgint *qtyread,
         wgint restval, ccon *con, int count, wgint *last_expected_bytes,
-        FILE *warc_tmp)
+        struct warc_context *warc_context)
 {
   int csock, dtsock, local_sock, res;
   uerr_t err = RETROK;          /* appease the compiler */
+  uerr_t err_tmp;
   FILE *fp = NULL;
-  char *respline, *tms;
+  char *respline, *tms, *received_msg, rd_size_s[30], *tmp;
   const char *user, *passwd, *tmrate;
   int cmd = con->cmd;
   wgint expected_bytes = 0;
@@ -355,7 +906,6 @@ getftp (struct url *u, struct url *original_url,
   assert (!((cmd & DO_LIST) && (cmd & DO_RETR)));
   /* Make sure that at least *something* is requested.  */
   assert ((cmd & (DO_LIST | DO_CWD | DO_RETR | DO_LOGIN)) != 0);
-
   *qtyread = restval;
 
   /* Find the username with priority */
@@ -393,6 +943,17 @@ getftp (struct url *u, struct url *original_url,
   local_sock = -1;
   con->dltime = 0;
 
+  if (opt.warc_filename != NULL)
+    {
+      /* Create the warc_context or rotate it. */
+      if (warc_context->ccon_fp == NULL)
+        err_tmp = create_warc_context (warc_context, con, u);
+      else
+        err_tmp = rotate_warc_context (warc_context, con, u, false);
+      if (err_tmp != RETROK)
+        return err_tmp;
+    }
+
 #ifdef HAVE_SSL
   if (u->scheme == SCHEME_FTPS)
     {
@@ -419,20 +980,50 @@ getftp (struct url *u, struct url *original_url,
   if (!(cmd & DO_LOGIN))
     {
       csock = con->csock;
+
+      err = write_control_message_sock ("Reusing control connection to", NULL,
+                                        NULL, csock, NULL, warc_context->ccon_fp);
+      if (err != RETROK)
+        return err;
+
+      if (opt.warc_filename != NULL
+          && !socket_ip_address (csock, &warc_context->ip_addr, ENDPOINT_PEER))
+        return CONERROR;
+
 #ifdef HAVE_SSL
       using_data_security = con->st & DATA_CHANNEL_SECURITY;
 #endif
     }
   else                          /* cmd & DO_LOGIN */
     {
-      char    *host = con->proxy ? con->proxy->host : u->host;
-      int      port = con->proxy ? con->proxy->port : u->port;
-
       /* Login to the server: */
 
       /* First: Establish the control connection.  */
 
+      char    *host = con->proxy ? con->proxy->host : u->host;
+      int      port = con->proxy ? con->proxy->port : u->port;
+
+      if (opt.warc_filename != NULL)
+        {
+          warc_context->number = 0;
+          xzero (warc_context->origin_id_uuid);
+        }
+
+      err = write_control_message_host_port ("Opening control connection to",
+                                             host, port, NULL, warc_context->ccon_fp);
+      if (err != RETROK)
+        return err;
+
       csock = connect_to_host (host, port);
+
+      if (csock == E_HOST || csock < 0)
+        {
+          err = write_control_message_host_port ("Failed to open control connection to",
+                                                host, port, NULL, warc_context->ccon_fp);
+          if (err != RETROK)
+            return err;
+        }
+
       if (csock == E_HOST)
           return HOSTERR;
       else if (csock < 0)
@@ -444,6 +1035,15 @@ getftp (struct url *u, struct url *original_url,
       else
         con->csock = -1;
 
+      err = write_control_message_sock ("Opened control connection to", NULL,
+                                        NULL, csock, NULL, warc_context->ccon_fp);
+      if (err != RETROK)
+        return err;
+
+      if (opt.warc_filename != NULL
+          && !socket_ip_address (csock, &warc_context->ip_addr, ENDPOINT_PEER))
+        return CONERROR;
+
 #ifdef HAVE_SSL
       if (u->scheme == SCHEME_FTPS)
         {
@@ -452,31 +1052,35 @@ getftp (struct url *u, struct url *original_url,
            */
           if (opt.ftps_implicit)
             {
-              err = init_control_ssl_connection (csock, u, &using_control_security);
+              err = init_control_ssl_connection (csock, u, &using_control_security,
+                                                 con, warc_context->ccon_fp,
+                                                 warc_context);
               if (err != NOCONERROR)
                 return err;
-              err = get_ftp_greeting (csock, con);
+              err = get_ftp_greeting (csock, con, warc_context->ccon_fp);
               if (err != FTPOK)
                 return err;
             }
           else
             {
-              err = get_ftp_greeting (csock, con);
+              err = get_ftp_greeting (csock, con, warc_context->ccon_fp);
               if (err != FTPOK)
                 return err;
-              err = init_control_ssl_connection (csock, u, &using_control_security);
+              err = init_control_ssl_connection (csock, u, &using_control_security,
+                                                 con, warc_context->ccon_fp,
+                                                 warc_context);
               if (err != NOCONERROR)
                 return err;
             }
         }
       else
         {
-          err = get_ftp_greeting (csock, con);
+          err = get_ftp_greeting (csock, con, warc_context->ccon_fp);
           if (err != FTPOK)
             return err;
         }
 #else
-      err = get_ftp_greeting (csock, con);
+      err = get_ftp_greeting (csock, con, warc_context->ccon_fp);
       if (err != FTPOK)
         return err;
 #endif
@@ -490,11 +1094,11 @@ getftp (struct url *u, struct url *original_url,
         {
           /* If proxy is in use, log in as username@target-site. */
           char *logname = concat_strings (user, "@", u->host, (char *) 0);
-          err = ftp_login (csock, logname, passwd);
+          err = ftp_login (csock, logname, passwd, warc_context->ccon_fp);
           xfree (logname);
         }
       else
-        err = ftp_login (csock, user, passwd);
+        err = ftp_login (csock, user, passwd, warc_context->ccon_fp);
 
       /* FTPRERR, FTPSRVERR, WRITEFAILED, FTPLOGREFUSED, FTPLOGINC */
       switch (err)
@@ -503,34 +1107,24 @@ getftp (struct url *u, struct url *original_url,
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPSRVERR:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("Error in server greeting.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case WRITEFAILED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
                    _("Write failed, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPLOGREFUSED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("The server refuses login.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return FTPLOGREFUSED;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPLOGINC:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("Login incorrect.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return FTPLOGINC;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPOK:
           if (!opt.server_response)
             logputs (LOG_VERBOSE, _("Logged in!\n"));
@@ -551,7 +1145,7 @@ Error in server response, closing control connection.\n"));
             {
               if (!opt.server_response)
                 logputs (LOG_VERBOSE, "==> PBSZ 0 ... ");
-              if ((err = ftp_pbsz (csock, 0)) == FTPNOPBSZ)
+              if ((err = ftp_pbsz (csock, 0, warc_context->ccon_fp)) == FTPNOPBSZ)
                 {
                   logputs (LOG_NOTQUIET, _("Server did not accept the 'PBSZ 0' command.\n"));
                   return err;
@@ -561,7 +1155,7 @@ Error in server response, closing control connection.\n"));
 
               if (!opt.server_response)
                 logprintf (LOG_VERBOSE, "  ==> PROT %c ... ", (int) prot);
-              if ((err = ftp_prot (csock, prot)) == FTPNOPROT)
+              if ((err = ftp_prot (csock, prot, warc_context->ccon_fp)) == FTPNOPROT)
                 {
                   logprintf (LOG_NOTQUIET, _("Server did not accept the 'PROT %c' command.\n"), (int) prot);
                   return err;
@@ -578,10 +1172,52 @@ Error in server response, closing control connection.\n"));
         }
 #endif
 
+      if (opt.warc_filename != NULL)
+        {
+          /* Extra: Get the system features and run other commands
+             to archive the responses. */
+          if (!opt.server_response)
+            logprintf (LOG_VERBOSE, "==> FEAT ... ");
+          err = ftp_feat (csock, warc_context->ccon_fp);
+          if (err == FTPOK)
+            {
+              if (!opt.server_response)
+                logprintf (LOG_VERBOSE, "==> HELP ... ");
+              err = ftp_help (csock, warc_context->ccon_fp);
+            }
+          if (err == FTPOK)
+            {
+              if (!opt.server_response)
+                logprintf (LOG_VERBOSE, "==> STAT ... ");
+              err = ftp_stat (csock, warc_context->ccon_fp);
+            }
+          if (err == FTPOK)
+            {
+              if (!opt.server_response)
+                logprintf (LOG_VERBOSE, "==> NOOP ... ");
+              err = ftp_noop (csock, warc_context->ccon_fp);
+            }
+          switch (err)
+            {
+            case FTPRERR:
+              logputs (LOG_VERBOSE, "\n");
+              logputs (LOG_NOTQUIET, _("\
+    Error in server response, closing control connection.\n"));
+              return close_sock (csock, 0, con, warc_context->ccon_fp, err);
+            case FTPOK:
+              break;
+            default:
+              abort ();
+            }
+        }
+
+      if (!opt.server_response && err != FTPSRVERR)
+        logputs (LOG_VERBOSE, _("done.    "));
+
       /* Third: Get the system type */
       if (!opt.server_response)
         logprintf (LOG_VERBOSE, "==> SYST ... ");
-      err = ftp_syst (csock, &con->rs, &con->rsu);
+      err = ftp_syst (csock, &con->rs, &con->rsu, warc_context->ccon_fp);
       /* FTPRERR */
       switch (err)
         {
@@ -589,9 +1225,7 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPSRVERR:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
@@ -648,7 +1282,7 @@ Error in server response, closing control connection.\n"));
 
       if (!opt.server_response)
         logprintf (LOG_VERBOSE, "==> PWD ... ");
-      err = ftp_pwd (csock, &con->id);
+      err = ftp_pwd (csock, &con->id, warc_context->ccon_fp);
       /* FTPRERR */
       switch (err)
         {
@@ -656,9 +1290,7 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPSRVERR :
           /* PWD unsupported -- assume "/". */
           xfree (con->id);
@@ -713,7 +1345,7 @@ Error in server response, closing control connection.\n"));
       type_char = ftp_process_type (u->params);
       if (!opt.server_response)
         logprintf (LOG_VERBOSE, "==> TYPE %c ... ", type_char);
-      err = ftp_type (csock, type_char);
+      err = ftp_type (csock, type_char, warc_context->ccon_fp);
       /* FTPRERR, WRITEFAILED, FTPUNKNOWNTYPE */
       switch (err)
         {
@@ -721,24 +1353,18 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case WRITEFAILED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
                    _("Write failed, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPUNKNOWNTYPE:
           logputs (LOG_VERBOSE, "\n");
           logprintf (LOG_NOTQUIET,
                      _("Unknown type `%c', closing control connection.\n"),
                      type_char);
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPOK:
           /* Everything is OK.  */
           break;
@@ -953,7 +1579,7 @@ Error in server response, closing control connection.\n"));
                 logprintf (LOG_VERBOSE, "==> CWD (%d) %s ... ", cwd_count,
                            quotearg_style (escape_quoting_style, target));
 
-              err = ftp_cwd (csock, targ);
+              err = ftp_cwd (csock, targ, warc_context->ccon_fp);
 
               /* FTPRERR, WRITEFAILED, FTPNSFOD */
               switch (err)
@@ -962,23 +1588,17 @@ Error in server response, closing control connection.\n"));
                     logputs (LOG_VERBOSE, "\n");
                     logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-                    fd_close (csock);
-                    con->csock = -1;
-                    return err;
+                    return close_sock (csock, 0, con, warc_context->ccon_fp, err);
                   case WRITEFAILED:
                     logputs (LOG_VERBOSE, "\n");
                     logputs (LOG_NOTQUIET,
                              _("Write failed, closing control connection.\n"));
-                    fd_close (csock);
-                    con->csock = -1;
-                    return err;
+                    return close_sock (csock, 0, con, warc_context->ccon_fp, err);
                   case FTPNSFOD:
                     logputs (LOG_VERBOSE, "\n");
                     logprintf (LOG_NOTQUIET, _("No such directory %s.\n\n"),
                                quote (u->dir));
-                    fd_close (csock);
-                    con->csock = -1;
-                    return err;
+                    return close_sock (csock, 0, con, warc_context->ccon_fp, err);
                   case FTPOK:
                     break;
                   default:
@@ -1006,7 +1626,7 @@ Error in server response, closing control connection.\n"));
                        quotearg_style (escape_quoting_style, u->file));
         }
 
-      err = ftp_size (csock, u->file, &expected_bytes);
+      err = ftp_size (csock, u->file, &expected_bytes, warc_context->ccon_fp);
       /* FTPRERR */
       switch (err)
         {
@@ -1015,9 +1635,7 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          return err;
+          return close_sock (csock, 0, con, warc_context->ccon_fp, err);
         case FTPOK:
           got_expected_bytes = true;
           /* Everything is OK.  */
@@ -1039,14 +1657,32 @@ Error in server response, closing control connection.\n"));
       /* Server confirms that file has length restval. We should stop now.
          Some servers (f.e. NcFTPd) return error when receive REST 0 */
       logputs (LOG_VERBOSE, _("File has already been retrieved.\n"));
-      fd_close (csock);
-      con->csock = -1;
-      return RETRFINISHED;
+      return close_sock (csock, 0, con, warc_context->ccon_fp, RETRFINISHED);
     }
 
   do
   {
   try_again = false;
+
+  if (opt.warc_filename && warc_context->written_resource)
+    {
+      /* If the resource was previously correctly written, it is written
+         out in the WARC resource record, together with the WARC metadata
+         record and new file file pointers are prepared. */
+      err_tmp = rotate_warc_context (warc_context, con, u, false);
+      if (err_tmp != RETROK)
+        return err_tmp;
+
+      if (!socket_ip_address (csock, &warc_context->ip_addr, ENDPOINT_PEER))
+        return CONERROR;
+
+      /* Note the control connection is reused. */
+      err_tmp = write_control_message_sock ("Reusing control connection to", NULL,
+                                            NULL, csock, NULL, warc_context->ccon_fp);
+      if (err_tmp != RETROK)
+        return err_tmp;
+    }
+
   /* If anything is to be retrieved, PORT (or PASV) must be sent.  */
   if (cmd & (DO_LIST | DO_RETR))
     {
@@ -1054,7 +1690,8 @@ Error in server response, closing control connection.\n"));
         {
           ip_address passive_addr;
           int        passive_port;
-          err = ftp_do_pasv (csock, &passive_addr, &passive_port);
+          err = ftp_do_pasv (csock, &passive_addr, &passive_port,
+                             warc_context->ccon_fp);
           /* FTPRERR, WRITEFAILED, FTPNOPASV, FTPINVPASV */
           switch (err)
             {
@@ -1062,16 +1699,12 @@ Error in server response, closing control connection.\n"));
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-              fd_close (csock);
-              con->csock = -1;
-              return err;
+              return close_sock (csock, 0, con, warc_context->ccon_fp, err);
             case WRITEFAILED:
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET,
                        _("Write failed, closing control connection.\n"));
-              fd_close (csock);
-              con->csock = -1;
-              return err;
+              return close_sock (csock, 0, con, warc_context->ccon_fp, err);
             case FTPNOPASV:
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET, _("Cannot initiate PASV transfer.\n"));
@@ -1089,18 +1722,34 @@ Error in server response, closing control connection.\n"));
             {
               DEBUGP (("trying to connect to %s port %d\n",
                       print_address (&passive_addr), passive_port));
+              err = write_control_message_host_port ("Opening data connection to",
+                                    print_address (&passive_addr),
+                                    passive_port, NULL, warc_context->ccon_fp);
+              if (err != RETROK)
+                return err;
               dtsock = connect_to_ip (&passive_addr, passive_port, NULL);
               if (dtsock < 0)
                 {
                   int save_errno = errno;
-                  fd_close (csock);
-                  con->csock = -1;
+                  err = write_control_message_host_port ("Failed to open data connection to",
+                                    print_address (&passive_addr), passive_port,
+                                    NULL, warc_context->ccon_fp);
+                  if (err != RETROK)
+                    return err;
+                  err = close_sock (csock, 0, con, warc_context->ccon_fp, RETROK);
+                  if (err != RETROK)
+                    return err;
                   logprintf (LOG_VERBOSE, _("couldn't connect to %s port %d: %s\n"),
                              print_address (&passive_addr), passive_port,
                              strerror (save_errno));
                   return (retryable_socket_connect_error (save_errno)
                           ? CONERROR : CONIMPOSSIBLE);
                 }
+
+              err = write_control_message_sock ("Opened data connection to",
+                                    NULL, NULL, dtsock, NULL, warc_context->ccon_fp);
+              if (err != RETROK)
+                return err;
 
               if (!opt.server_response)
                 logputs (LOG_VERBOSE, _("done.    "));
@@ -1116,7 +1765,7 @@ Error in server response, closing control connection.\n"));
         }
       else
         {
-          err = ftp_do_port (csock, &local_sock);
+          err = ftp_do_port (csock, &local_sock, warc_context->ccon_fp);
           /* FTPRERR, WRITEFAILED, bindport (FTPSYSERR), HOSTERR,
              FTPPORTERR */
           switch (err)
@@ -1125,40 +1774,32 @@ Error in server response, closing control connection.\n"));
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-              fd_close (csock);
-              con->csock = -1;
-              fd_close (dtsock);
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
               fd_close (local_sock);
               return err;
             case WRITEFAILED:
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET,
                        _("Write failed, closing control connection.\n"));
-              fd_close (csock);
-              con->csock = -1;
-              fd_close (dtsock);
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
               fd_close (local_sock);
               return err;
             case CONSOCKERR:
               logputs (LOG_VERBOSE, "\n");
               logprintf (LOG_NOTQUIET, "socket: %s\n", strerror (errno));
-              fd_close (csock);
-              con->csock = -1;
-              fd_close (dtsock);
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
               fd_close (local_sock);
               return err;
             case FTPSYSERR:
               logputs (LOG_VERBOSE, "\n");
               logprintf (LOG_NOTQUIET, _("Bind error (%s).\n"),
                          strerror (errno));
-              fd_close (dtsock);
+              err = close_sock (0, dtsock, con, warc_context->ccon_fp, err);
               return err;
             case FTPPORTERR:
               logputs (LOG_VERBOSE, "\n");
               logputs (LOG_NOTQUIET, _("Invalid PORT.\n"));
-              fd_close (csock);
-              con->csock = -1;
-              fd_close (dtsock);
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
               fd_close (local_sock);
               return err;
             case FTPOK:
@@ -1177,7 +1818,7 @@ Error in server response, closing control connection.\n"));
       if (!opt.server_response)
         logprintf (LOG_VERBOSE, "==> REST %s ... ",
                    number_to_static_string (restval));
-      err = ftp_rest (csock, restval);
+      err = ftp_rest (csock, restval, warc_context->ccon_fp);
 
       /* FTPRERR, WRITEFAILED, FTPRESTFAIL */
       switch (err)
@@ -1186,18 +1827,14 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case WRITEFAILED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
                    _("Write failed, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case FTPRESTFAIL:
@@ -1222,7 +1859,8 @@ Error in server response, closing control connection.\n"));
           bool exists = false;
           bool all_exist = true;
           struct fileinfo *f;
-          uerr_t _res = ftp_get_listing (u, original_url, con, &f);
+          uerr_t _res = ftp_get_listing (u, original_url, con, &f, warc_context,
+                                         NULL, NULL);
           /* Set the DO_RETR command flag again, because it gets unset when
              calling ftp_get_listing() and would otherwise cause an assertion
              failure earlier on when this function gets repeatedly called
@@ -1254,9 +1892,9 @@ Error in server response, closing control connection.\n"));
                              quote (u->file));
                 }
             }
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, RETROK);
+          if (err != RETROK)
+            return err;
           fd_close (local_sock);
           if (all_exist) {
               return RETRFINISHED;
@@ -1276,7 +1914,7 @@ Error in server response, closing control connection.\n"));
             }
         }
 
-      err = ftp_retr (csock, u->file);
+      err = ftp_retr (csock, u->file, warc_context->ccon_fp);
       /* FTPRERR, WRITEFAILED, FTPNSFOD */
       switch (err)
         {
@@ -1284,25 +1922,21 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case WRITEFAILED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
                    _("Write failed, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case FTPNSFOD:
           logputs (LOG_VERBOSE, "\n");
           logprintf (LOG_NOTQUIET, _("No such file %s.\n\n"),
                      quote (u->file));
-          fd_close (dtsock);
+          err = close_sock (0, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case FTPOK:
@@ -1325,7 +1959,8 @@ Error in server response, closing control connection.\n"));
       /* As Maciej W. Rozycki (macro@ds2.pg.gda.pl) says, `LIST'
          without arguments is better than `LIST .'; confirmed by
          RFC959.  */
-      err = ftp_list (csock, NULL, con->st&AVOID_LIST_A, con->st&AVOID_LIST, &list_a_used);
+      err = ftp_list (csock, NULL, con->st&AVOID_LIST_A, con->st&AVOID_LIST,
+                      &list_a_used, warc_context->ccon_fp);
 
       /* FTPRERR, WRITEFAILED */
       switch (err)
@@ -1334,25 +1969,21 @@ Error in server response, closing control connection.\n"));
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET, _("\
 Error in server response, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case WRITEFAILED:
           logputs (LOG_VERBOSE, "\n");
           logputs (LOG_NOTQUIET,
                    _("Write failed, closing control connection.\n"));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case FTPNSFOD:
           logputs (LOG_VERBOSE, "\n");
           logprintf (LOG_NOTQUIET, _("No such file or directory %s.\n\n"),
                      quote ("."));
-          fd_close (dtsock);
+          err = close_sock (0, dtsock, con, warc_context->ccon_fp, err);
           fd_close (local_sock);
           return err;
         case FTPOK:
@@ -1475,11 +2106,9 @@ Error in server response, closing control connection.\n"));
                 {
                   logprintf (LOG_NOTQUIET, "%s: %s\n", con->target,
                     strerror (errno));
-                    fd_close (csock);
-                    con->csock = -1;
-                    fd_close (dtsock);
+                    err = close_sock (csock, dtsock, con, warc_context->ccon_fp, UNLINKERR);
                     fd_close (local_sock);
-                    return UNLINKERR;
+                    return err;
                 }
             }
 
@@ -1511,21 +2140,17 @@ Error in server response, closing control connection.\n"));
                  Instead, return and retry the download.  */
               logprintf (LOG_NOTQUIET, _("%s has sprung into existence.\n"),
                          con->target);
-              fd_close (csock);
-              con->csock = -1;
-              fd_close (dtsock);
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, FOPEN_EXCL_ERR);
               fd_close (local_sock);
-              return FOPEN_EXCL_ERR;
+              return err;
             }
         }
       if (!fp)
         {
           logprintf (LOG_NOTQUIET, "%s: %s\n", con->target, strerror (errno));
-          fd_close (csock);
-          con->csock = -1;
-          fd_close (dtsock);
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, FOPENERR);
           fd_close (local_sock);
-          return FOPENERR;
+          return err;
         }
     }
   else
@@ -1546,41 +2171,132 @@ Error in server response, closing control connection.\n"));
       /* We should try to restore the existing SSL session in the data connection
        * and fall back to establishing a new session if the server doesn't want to restore it.
        */
+
+      /* When resuming an SSL session for the data connection, the event
+         message holds the address for which the SSL session was previously
+         created. */
+      char *ip_str, *port_str;
+      bool is_ipv6;
+
+      if (socket_to_string (&ip_str, &port_str, &is_ipv6, csock) != RETROK)
+        return WARC_ERR;
+
+      tmp = concat_strings (" for host ", u->host, " using SSL session from ",
+                            is_ipv6 ? "[" : "",ip_str, is_ipv6 ? "]" : "",
+                            ":", port_str, ".", (char *) 0);
+      xfree (ip_str);
+      xfree (port_str);
+
+      if (opt.ftps_resume_ssl
+          && write_control_message_sock ("Resuming SSL handshake on", NULL, NULL,
+                                    dtsock, tmp, warc_context->ccon_fp) != RETROK)
+        {
+          xfree (tmp);
+          return WARC_TMP_FWRITEERR;
+        }
       if (!opt.ftps_resume_ssl || !ssl_connect_wget (dtsock, u->host, &csock))
         {
           if (opt.ftps_resume_ssl)
-            logputs (LOG_NOTQUIET, "Server does not want to resume the SSL session. Trying with a new one.\n");
+            {
+              logputs (LOG_NOTQUIET, "Server does not want to resume the SSL session. Trying with a new one.\n");
+              if (write_control_message_sock ("Failed to resume SSL handshake on",
+                                    NULL, NULL, dtsock, tmp,
+                                    warc_context->ccon_fp) != RETROK)
+                {
+                  xfree (tmp);
+                  return WARC_TMP_FWRITEERR;
+                }
+            }
+
+          if (write_control_message_ssl_connection ("Performing", dtsock, u,
+                                    warc_context->ccon_fp) != RETROK)
+            return WARC_TMP_FWRITEERR;
+
           if (!ssl_connect_wget (dtsock, u->host, NULL))
             {
-              fd_close (csock);
-              fd_close (dtsock);
-              err = CONERROR;
+              if (write_control_message_ssl_connection ("Failed to perform",
+                                    dtsock, u, warc_context->ccon_fp) != RETROK)
+                return WARC_TMP_FWRITEERR;
+              err = close_sock (csock, dtsock, con, warc_context->ccon_fp, CONERROR);
               logputs (LOG_NOTQUIET, "Could not perform SSL handshake.\n");
               goto exit_error;
             }
+
+          if (write_control_message_ssl_connection ("Performed", dtsock, u,
+                                    warc_context->ccon_fp) != RETROK)
+            return WARC_TMP_FWRITEERR;
         }
       else
-        logputs (LOG_NOTQUIET, "Resuming SSL session in data connection.\n");
+        {
+          if (write_control_message_sock ("Resumed SSL handshake on", NULL, NULL,
+                                    dtsock, tmp, warc_context->ccon_fp) != RETROK)
+            {
+              xfree (tmp);
+              return WARC_TMP_FWRITEERR;
+            }
+
+          logputs (LOG_NOTQUIET, "Resuming SSL session in data connection.\n");
+        }
+
+      xfree (tmp);
 
       if (!ssl_check_certificate (dtsock, u->host))
         {
-          fd_close (csock);
-          fd_close (dtsock);
-          err = CONERROR;
+          err = close_sock (csock, dtsock, con, warc_context->ccon_fp, CONERROR);
           goto exit_error;
+        }
+
+      if (opt.warc_filename != NULL)
+        {
+          warc_context->dtsock_protocol = ssl_get_protocol (dtsock);
+          warc_context->dtsock_cipher_name = ssl_get_cipher_name (dtsock);
         }
     }
 #endif
+
+  /* Make sure we are cleared to receive data for the WARC resource record. */
+  if (opt.warc_filename && warc_context->written_resource)
+    return WARC_ERR;
+
+  if (restval != 0)
+    {
+      logputs (LOG_NOTQUIET, "Partial file should not be downloaded when writing a WARC.\n");
+      return WARC_ERR;
+    }
 
   /* Get the contents of the document.  */
   flags = 0;
   if (restval && rest_failed)
     flags |= rb_skip_startpos;
   rd_size = 0;
+
+  /* Store information for the partial http_stat for the Lua hooks. */
+  if (opt.warc_filename != NULL)
+    {
+      warc_context->hstatp->len = restval;
+      warc_context->hstatp->rd_size = rd_size;
+      warc_context->hstatp->local_file = con->target;
+      warc_context->hstatp->restval = restval;
+      warc_context->hstatp->dltime = 0;
+      warc_context->hstatp->contlen = expected_bytes;
+      /* The data connection IP may be different from the control
+         connection IP, so retrieve and store this. */
+      if (!socket_ip_address (dtsock, &warc_context->ip_addr_data, ENDPOINT_PEER))
+        return CONERROR;
+    }
+
   res = fd_read_body (con->target, dtsock, fp,
                       expected_bytes ? expected_bytes - restval : 0,
-                      restval, &rd_size, qtyread, &con->dltime, flags, warc_tmp,
-                      NULL);
+                      restval, &rd_size, qtyread, &con->dltime, flags,
+                      warc_context->fp, NULL);
+
+  if (opt.warc_filename != NULL)
+    {
+      warc_context->hstatp->rd_size = rd_size;
+      warc_context->hstatp->res = res;
+      warc_context->hstatp->dltime = con->dltime;
+      warc_context->hstatp->rderrmsg = xstrdup (fd_errstr (dtsock));
+    }
 
   tms = datetime_str (time (NULL));
   tmrate = retr_rate (rd_size, con->dltime);
@@ -1596,14 +2312,22 @@ Error in server response, closing control connection.\n"));
   if (!output_stream || con->cmd & DO_LIST)
     fclose (fp);
 
-  /* If fd_read_body couldn't write to fp or warc_tmp, bail out.  */
-  if (res == -2 || (warc_tmp != NULL && res == -3))
+  /* Write an event message for the received bytes. */
+  sprintf (rd_size_s, "%d", rd_size);
+  received_msg = concat_strings ("Received ", rd_size_s, " bytes\r\n", (char *) 0);
+  if (write_control_message_event (received_msg, -1,
+                                   warc_context->ccon_fp) < 0)
+    return WARC_TMP_FWRITEERR;
+  xfree (received_msg);
+
+  /* If fd_read_body couldn't write to fp or warc_context->fp, bail out.  */
+  if (res == -2 || (warc_context->fp != NULL && res == -3))
     {
       logprintf (LOG_NOTQUIET, _("%s: %s, closing control connection.\n"),
                  con->target, strerror (errno));
-      fd_close (csock);
-      con->csock = -1;
-      fd_close (dtsock);
+      err_tmp = close_sock (csock, dtsock, con, warc_context->ccon_fp, RETROK);
+      if (err_tmp != RETROK)
+        return err_tmp;
       if (res == -2)
         return FWRITEERR;
       else if (res == -3)
@@ -1616,10 +2340,12 @@ Error in server response, closing control connection.\n"));
       if (opt.server_response)
         logputs (LOG_ALWAYS, "\n");
     }
-  fd_close (dtsock);
+  err_tmp = close_sock (0, dtsock, con, warc_context->ccon_fp, RETROK);
+  if (err_tmp != RETROK)
+    return err_tmp;
 
   /* Get the server to tell us if everything is retrieved.  */
-  err = ftp_response (csock, &respline);
+  err = ftp_response (csock, &respline, warc_context->ccon_fp);
   if (err != FTPOK)
     {
       /* The control connection is decidedly closed.  Print the time
@@ -1631,9 +2357,7 @@ Error in server response, closing control connection.\n"));
          return FTPRETRINT, since there is a possibility that the
          whole file was retrieved nevertheless (but that is for
          ftp_loop_internal to decide).  */
-      fd_close (csock);
-      con->csock = -1;
-      return FTPRETRINT;
+      return close_sock (csock, 0, con, warc_context->ccon_fp, FTPRETRINT);
     } /* err != FTPOK */
   *last_expected_bytes = ftp_expected_bytes (respline);
   /* If retrieval failed for any reason, return FTPRETRINT, but do not
@@ -1644,6 +2368,11 @@ Error in server response, closing control connection.\n"));
     {
       if (res != -1)
         logprintf (LOG_NOTQUIET, "%s (%s) - ", tms, tmrate);
+
+      if (write_control_message_event ("Data transfer aborted\r\n", -1,
+                                       warc_context->ccon_fp) < 0)
+        return WARC_TMP_FWRITEERR;
+
       logputs (LOG_NOTQUIET, _("Data transfer aborted.\n"));
 #ifdef HAVE_SSL
       if (!c_strncasecmp (respline, "425", 3) && u->scheme == SCHEME_FTPS)
@@ -1656,6 +2385,22 @@ Error in server response, closing control connection.\n"));
       xfree (respline);
       return FTPRETRINT;
     }
+  else if (opt.warc_filename != NULL)
+    {
+      if (expected_bytes == rd_size || warc_context->is_list)
+        {
+          warc_context->written_resource = true;
+          warc_context->hstatp->statcode = 100 * (respline[0] - '0') + 10 * (respline[1] - '0') + (respline[2] - '0');
+          warc_context->hstatp->message = xstrdup (respline+3);
+        }
+      else
+        {
+          if (write_control_message_event ("Incomplete data received\r\n", -1,
+                                           warc_context->ccon_fp) < 0)
+            return WARC_TMP_FWRITEERR;
+        }
+    }
+
   xfree (respline);
 
   if (res == -1)
@@ -1669,8 +2414,9 @@ Error in server response, closing control connection.\n"));
     {
       /* Closing the socket is faster than sending 'QUIT' and the
          effect is the same.  */
-      fd_close (csock);
-      con->csock = -1;
+      err_tmp = close_sock (csock, 0, con, warc_context->ccon_fp, RETROK);
+      if (err_tmp != RETROK)
+        return err_tmp;
     }
   /* If it was a listing, and opt.server_response is true,
      print it out.  */
@@ -1826,19 +2572,20 @@ exit_error:
    set), makes them up to retrieve the file given by the URL.  */
 static uerr_t
 ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
-                   ccon *con, char **local_file, bool force_full_retrieve)
+                   ccon *con, char **local_file, bool force_full_retrieve,
+                   struct warc_context *warc_context, struct hash_table *blacklist,
+                   struct luahooks_url **luahooks_url)
 {
   int count, orig_lp;
   wgint restval, len = 0, qtyread = 0;
   char *tms, *locf;
   const char *tmrate = NULL;
-  uerr_t err;
+  uerr_t err, err_tmp;
   struct stat st;
+  struct luahooks_url *luahooks_local_url;
 
   /* Declare WARC variables. */
   bool warc_enabled = (opt.warc_filename != NULL);
-  FILE *warc_tmp = NULL;
-  ip_address warc_ip_buf, *warc_ip = NULL;
   wgint last_expected_bytes = 0;
 
   /* Get the target, and set the name for the message accordingly. */
@@ -1910,21 +2657,6 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
             con->cmd |= DO_CWD;
         }
 
-      /* For file RETR requests, we can write a WARC record.
-         We record the file contents to a temporary file. */
-      if (warc_enabled && (con->cmd & DO_RETR) && warc_tmp == NULL)
-        {
-          warc_tmp = warc_tempfile ();
-          if (warc_tmp == NULL)
-            return WARC_TMP_FOPENERR;
-
-          if (!con->proxy && con->csock != -1)
-            {
-              warc_ip = &warc_ip_buf;
-              socket_ip_address (con->csock, warc_ip, ENDPOINT_PEER);
-            }
-        }
-
       /* Decide whether or not to restart.  */
       if (con->cmd & DO_LIST)
         restval = 0;
@@ -1967,15 +2699,63 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
       else
         len = 0;
 
+      warc_context->fileinfo = f;
+
       /* If we are working on a WARC record, getftp should also write
-         to the warc_tmp file. */
+         to the warc_context->fp file. */
       err = getftp (u, original_url, len, &qtyread, restval, con, count,
-                    &last_expected_bytes, warc_tmp);
+                    &last_expected_bytes, warc_context);
 
       if (con->csock == -1)
         con->st &= ~DONE_CWD;
       else
         con->st |= DONE_CWD;
+
+      if (opt.warc_filename)
+        {
+          luahook_action_t action = luahooks_httploop_result_ftp (
+                    warc_context->url, err, warc_context->hstatp);
+          switch (action)
+            {
+              case LUAHOOK_NOTHING:
+                break;
+              case LUAHOOK_CONTINUE:
+                continue;
+              case LUAHOOK_EXIT:
+                return err;
+              case LUAHOOK_ABORT:
+                abort ();
+            }
+
+          if (luahooks_url != NULL)
+            {
+              luahooks_local_url = luahooks_get_urls_ftp (con->target, warc_context->url->url);
+
+              if (luahooks_local_url != NULL)
+                {
+                  /* Add the returned URLs to the blacklist under a special
+                     "luahook" value. */
+                  struct luahooks_url *lh_url = luahooks_local_url;
+                  while (lh_url != NULL)
+                    {
+                      if (!hash_table_contains (blacklist, lh_url->url))
+                        hash_table_put (blacklist, xstrdup (lh_url->url), "luahook");
+                      lh_url = lh_url->next;
+                    }
+
+                  /* Set the new found URLs, or append these. */
+                  if (*luahooks_url == NULL)
+                    *luahooks_url = luahooks_local_url;
+                  else
+                    {
+                      lh_url = *luahooks_url;
+                      while (lh_url->next != NULL)
+                        lh_url = lh_url->next;
+                      lh_url->next = luahooks_local_url;
+                    }
+                }
+            }
+        }
 
       switch (err)
         {
@@ -1990,11 +2770,6 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
             logputs (LOG_NOTQUIET, "Server does not like implicit FTPS connections.\n");
 #endif
           /* Fatal errors, give up.  */
-          if (warc_tmp != NULL)
-            {
-              fclose (warc_tmp);
-              warc_tmp = NULL;
-            }
           return err;
         case CONSOCKERR: case CONERROR: case FTPSRVERR: case FTPRERR:
         case WRITEFAILED: case FTPUNKNOWNTYPE: case FTPSYSERR:
@@ -2036,8 +2811,9 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
 
       if (con->st & ON_YOUR_OWN)
         {
-          fd_close (con->csock);
-          con->csock = -1;
+          err_tmp = close_sock (con->csock, 0, con, warc_context->ccon_fp, RETROK);
+          if (err_tmp != RETROK)
+            return err_tmp;
         }
       if (!opt.spider)
         {
@@ -2062,25 +2838,12 @@ ftp_loop_internal (struct url *u, struct url *original_url, struct fileinfo *f,
           xfree (hurl);
         }
 
-      if (warc_enabled && (con->cmd & DO_RETR))
-        {
-          /* Create and store a WARC resource record for the retrieved file. */
-          bool warc_res;
-
-          warc_res = warc_write_resource_record (NULL, u->url, NULL, NULL,
-                                                  warc_ip, NULL, warc_tmp, -1, NULL, NULL);
-
-          if (! warc_res)
-            return WARC_ERR;
-
-          /* warc_write_resource_record has also closed warc_tmp. */
-          warc_tmp = NULL;
-        }
-
       if (con->cmd & DO_LIST)
         /* This is a directory listing file. */
         {
-          if (!opt.remove_listing)
+          /* In case of writing to a WARC, the lists are also counted
+             in the total size. */
+          if (!opt.remove_listing || opt.warc_filename)
             /* --dont-remove-listing was specified, so do count this towards the
                number of bytes and files downloaded. */
             {
@@ -2121,23 +2884,20 @@ Removing file due to --delete-after in ftp_loop_internal():\n"));
       if (local_file)
         *local_file = xstrdup (locf);
 
-      if (warc_tmp != NULL)
-        {
-          fclose (warc_tmp);
-          warc_tmp = NULL;
-        }
-
       return RETROK;
     } while (!opt.ntry || (count < opt.ntry));
 
   if (con->csock != -1 && (con->st & ON_YOUR_OWN))
     {
-      fd_close (con->csock);
-      con->csock = -1;
+      err_tmp = close_sock (con->csock, 0, con, warc_context->ccon_fp, RETROK);
+      if (err_tmp != RETROK)
+        return err_tmp;
     }
 
-  if (warc_tmp != NULL)
-    fclose (warc_tmp);
+  /* The WARC records are not written out here, but the next time this
+     function is called, or finally at the end of ftp_loop. This way any
+     information that should go into the control conversation record can
+     still be captured up to the very end of the retrieval process. */
 
   return TRYLIMEXC;
 }
@@ -2146,9 +2906,10 @@ Removing file due to --delete-after in ftp_loop_internal():\n"));
    is specified in u->dir.  */
 static uerr_t
 ftp_get_listing (struct url *u, struct url *original_url, ccon *con,
-                 struct fileinfo **f)
+                 struct fileinfo **f, struct warc_context *warc_context,
+                 struct hash_table *blacklist, struct luahooks_url **luahooks_url)
 {
-  uerr_t err;
+  uerr_t err, err_tmp;
   char *uf;                     /* url file name */
   char *lf;                     /* list file name */
   char *old_target = con->target;
@@ -2167,7 +2928,8 @@ ftp_get_listing (struct url *u, struct url *original_url, ccon *con,
 
   con->target = xstrdup (lf);
   xfree (lf);
-  err = ftp_loop_internal (u, original_url, NULL, con, NULL, false);
+  err = ftp_loop_internal (u, original_url, NULL, con, NULL, false,
+                           warc_context, blacklist, luahooks_url);
   lf = xstrdup (con->target);
   xfree (con->target);
   con->target = old_target;
@@ -2187,12 +2949,29 @@ ftp_get_listing (struct url *u, struct url *original_url, ccon *con,
     *f = NULL;
   xfree (lf);
   con->cmd &= ~DO_LIST;
+
+  /* FTP listings are retrieved here, mainly. A HTML-ized version of the
+     listing is created and written to the temporary file for later
+     writing to the WARC file if wanted. */
+  if (opt.warc_ftp_html_conversion && warc_context->written_resource)
+    {
+      err_tmp = ftp_index (NULL, u, *f, warc_context);
+      if (err_tmp != FTPOK)
+        return err_tmp;
+    }
+
   return err;
 }
 
 static uerr_t ftp_retrieve_dirs (struct url *, struct url *,
-                                 struct fileinfo *, ccon *);
-static uerr_t ftp_retrieve_glob (struct url *, struct url *, ccon *, int);
+                                 struct fileinfo *, ccon *,
+                                 struct warc_context *,
+                                 struct hash_table *,
+                                 struct luahooks_url **);
+static uerr_t ftp_retrieve_glob (struct url *, struct url *, ccon *, int,
+                                 struct warc_context *,
+                                 struct hash_table *,
+                                 struct luahooks_url **);
 static struct fileinfo *delelement (struct fileinfo **, struct fileinfo **);
 
 /* Retrieve a list of files given in struct fileinfo linked list.  If
@@ -2204,7 +2983,10 @@ static struct fileinfo *delelement (struct fileinfo **, struct fileinfo **);
    ftp_retrieve_dirs will be called to retrieve the directories.  */
 static uerr_t
 ftp_retrieve_list (struct url *u, struct url *original_url,
-                   struct fileinfo *f, ccon *con)
+                   struct fileinfo *f, ccon *con,
+                   struct warc_context *warc_context,
+                   struct hash_table *blacklist,
+                   struct luahooks_url **luahooks_url)
 {
   static int depth = 0;
   uerr_t err;
@@ -2379,7 +3161,8 @@ Already have correct symlink %s -> %s\n\n"),
               if (dlthis)
                 {
                   err = ftp_loop_internal (u, original_url, f, con, NULL,
-                                           force_full_retrieve);
+                                           force_full_retrieve, warc_context,
+                                           blacklist, luahooks_url);
                 }
             } /* opt.retr_symlinks */
           break;
@@ -2393,7 +3176,8 @@ Already have correct symlink %s -> %s\n\n"),
           if (dlthis)
             {
               err = ftp_loop_internal (u, original_url, f, con, NULL,
-                                       force_full_retrieve);
+                                       force_full_retrieve, warc_context,
+                                       blacklist, luahooks_url);
             }
           break;
         case FT_UNKNOWN:
@@ -2465,7 +3249,8 @@ Already have correct symlink %s -> %s\n\n"),
   /* We do not want to call ftp_retrieve_dirs here */
   if (opt.recursive &&
       !(opt.reclevel != INFINITE_RECURSION && depth >= opt.reclevel))
-    err = ftp_retrieve_dirs (u, original_url, orig, con);
+    err = ftp_retrieve_dirs (u, original_url, orig, con, warc_context,
+                             blacklist, luahooks_url);
   else if (opt.recursive)
     DEBUGP ((_("Will not retrieve dirs since depth is %d (max %d).\n"),
              depth, opt.reclevel));
@@ -2479,7 +3264,10 @@ Already have correct symlink %s -> %s\n\n"),
    about excluded directories.  */
 static uerr_t
 ftp_retrieve_dirs (struct url *u, struct url *original_url,
-                   struct fileinfo *f, ccon *con)
+                   struct fileinfo *f, ccon *con,
+                   struct warc_context *warc_context,
+                   struct hash_table *blacklist,
+                   struct luahooks_url **luahooks_url)
 {
   char buf[1024];
   char *container = buf;
@@ -2537,7 +3325,8 @@ Not descending to %s as it is excluded/not-included.\n"),
       odir = xstrdup (u->dir);  /* because url_set_dir will free
                                    u->dir. */
       url_set_dir (u, newdir);
-      ftp_retrieve_glob (u, original_url, con, GLOB_GETALL);
+      ftp_retrieve_glob (u, original_url, con, GLOB_GETALL, warc_context,
+                         blacklist, luahooks_url);
       url_set_dir (u, odir);
       xfree (odir);
 
@@ -2600,14 +3389,19 @@ is_invalid_entry (struct fileinfo *f)
    directory.  */
 static uerr_t
 ftp_retrieve_glob (struct url *u, struct url *original_url,
-                   ccon *con, int action)
+                   ccon *con, int action, struct warc_context *warc_context,
+                   struct hash_table *blacklist, struct luahooks_url **luahooks_url)
 {
   struct fileinfo *f, *start;
-  uerr_t res;
+  uerr_t res, err_tmp;
+  bool lua_verdict;
+  int num_checked = 0;
+  int num_lua_skipped = 0;
 
   con->cmd |= LEAVE_PENDING;
 
-  res = ftp_get_listing (u, original_url, con, &start);
+  res = ftp_get_listing (u, original_url, con, &start, warc_context, blacklist,
+                         luahooks_url);
   if (res != RETROK)
     return res;
 
@@ -2636,6 +3430,15 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
   f = start;
   while (f)
     {
+      num_checked++;
+
+      ftp_reject_reason rr = FTP_RR_SUCCESS;
+
+      char *tmp_file = xstrdup (u->file);
+      url_set_file (u, "");
+      char *url = concat_strings (u->url, f->name, f->type == FT_DIRECTORY ? "/" : "", (char *) 0);;
+      url_set_file (u, tmp_file);
+      xfree (tmp_file);
 
       // Weed out files that do not confirm to the global rules given in
       // opt.accepts and opt.rejects
@@ -2644,49 +3447,37 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
         {
           logprintf (LOG_VERBOSE, _("Rejecting %s.\n"),
                      quote (f->name));
-          f = delelement (&f, &start);
-          continue;
+          rr = FTP_RR_NOTACCEPTABLE;
         }
 
-
       // Identify and eliminate possibly harmful names or invalid entries.
-      if (has_insecure_name_p (f->name) || is_invalid_entry (f))
+      if (rr == FTP_RR_SUCCESS && has_insecure_name_p (f->name))
+        {
+          logprintf (LOG_VERBOSE, _("Rejecting %s (Insecure Name).\n"),
+                     quote (f->name));
+          rr = FTP_RR_INSECURENAME;
+        }
+
+      if (rr == FTP_RR_SUCCESS && is_invalid_entry (f))
         {
           logprintf (LOG_VERBOSE, _("Rejecting %s (Invalid Entry).\n"),
                      quote (f->name));
-          f = delelement (&f, &start);
-          continue;
+          rr = FTP_RR_INVALID;
         }
 
-      if (opt.acceptregex || opt.rejectregex)
+      if (rr == FTP_RR_SUCCESS && (opt.acceptregex || opt.rejectregex))
         {
           // accept_url() takes the full URL.
-          char buf[1024];
-          char *url = buf;
-
-          if ((unsigned) snprintf(buf, sizeof(buf), "%s%s%s",
-                                  u->url, f->name, f->type == FT_DIRECTORY ? "/" : "")
-                                  >= sizeof(buf))
-            {
-              url = aprintf("%s%s%s", u->url, f->name, f->type == FT_DIRECTORY ? "/" : "");
-            }
-
           if (!accept_url (url))
             {
               logprintf (LOG_VERBOSE, _ ("%s is excluded/not-included through regex.\n"), url);
-              f = delelement (&f, &start);
-              if (url != buf)
-                xfree(url);
-              continue;
+              rr = FTP_RR_REGEX;
             }
-
-            if (url != buf)
-              xfree(url);
         }
 
       /* Now weed out the files that do not match our globbing pattern.
          If we are dealing with a globbing pattern, that is.  */
-      if (*u->file)
+      if (rr == FTP_RR_SUCCESS && *u->file)
         {
           if (action == GLOB_GLOBALL)
             {
@@ -2701,19 +3492,50 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
                 }
               if (matchres == FNM_NOMATCH)
                 {
-                  f = delelement (&f, &start); /* delete the element from the list */
-                  continue;
+                  rr = FTP_RR_GLOB;
                 }
             }
           else if (action == GLOB_GETONE)
             {
               if (0 != cmp(u->file, f->name))
                 {
-                  f = delelement (&f, &start);
-                  continue;
+                  rr = FTP_RR_GLOB;
                 }
             }
         }
+
+      if (rr == FTP_RR_SUCCESS && blacklist != NULL
+          && string_set_contains (blacklist, url)
+          && strcmp (hash_table_get (blacklist, url), "luahook") == 0)
+        {
+          logprintf (LOG_VERBOSE, _("Rejecting %s (Blacklisted).\n"),
+                     quote (f->name));
+          rr = FTP_RR_BLACKLIST;
+          num_lua_skipped++;
+        }
+
+      lua_verdict = luahooks_download_child_ftp (f, u, original_url, rr);
+
+      if (lua_verdict)
+        rr = FTP_RR_SUCCESS;
+      else if (rr == FTP_RR_SUCCESS)
+        {
+          rr = FTP_RR_LUAHOOK;
+          num_lua_skipped++;
+        }
+
+      if (rr != FTP_RR_SUCCESS)
+        {
+          f = delelement (&f, &start);
+          xfree(url);
+          continue;
+        }
+
+      if (!string_set_contains (blacklist, url))
+        hash_table_put (blacklist, xstrdup (url), "wget");
+
+      xfree(url);
+
       f = f->next;
     }
 
@@ -2724,8 +3546,12 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
   if (start)
     {
       /* Just get everything.  */
-      res = ftp_retrieve_list (u, original_url, start, con);
+      res = ftp_retrieve_list (u, original_url, start, con, warc_context,
+                               blacklist, luahooks_url);
     }
+  else if (num_lua_skipped > 0)
+    /* Without the Lua hook, the previous condition would have been true. */
+    res = RETROK;
   else
     {
       if (action == GLOB_GLOBALL)
@@ -2740,7 +3566,8 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
         {
           /* Let's try retrieving it anyway.  */
           con->st |= ON_YOUR_OWN;
-          res = ftp_loop_internal (u, original_url, NULL, con, NULL, false);
+          res = ftp_loop_internal (u, original_url, NULL, con, NULL, false,
+                                   warc_context, blacklist, luahooks_url);
           return res;
         }
 
@@ -2761,14 +3588,21 @@ ftp_retrieve_glob (struct url *u, struct url *original_url,
    encoded into a URL.  */
 uerr_t
 ftp_loop (struct url *u, struct url *original_url, char **local_file, int *dt,
-          struct url *proxy, bool recursive, bool glob)
+          struct url *proxy, bool recursive, bool glob, struct hash_table *blacklist,
+          struct luahooks_url **luahooks_url)
 {
   ccon con;                     /* FTP connection */
-  uerr_t res;
+  uerr_t res, err_tmp;
+  struct warc_context warc_context;
+
+  bool blacklist_given = (blacklist != NULL);
+  if (!blacklist_given)
+    blacklist = make_string_hash_table (0);
 
   *dt = 0;
 
   xzero (con);
+  xzero (warc_context);
 
   con.csock = -1;
   con.st = ON_YOUR_OWN;
@@ -2782,8 +3616,8 @@ ftp_loop (struct url *u, struct url *original_url, char **local_file, int *dt,
   if (!*u->file && !recursive)
     {
       struct fileinfo *f;
-      res = ftp_get_listing (u, original_url, &con, &f);
-
+      res = ftp_get_listing (u, original_url, &con, &f, &warc_context,
+                             blacklist, luahooks_url);
       if (res == RETROK)
         {
           if (opt.htmlify && !opt.spider)
@@ -2793,7 +3627,7 @@ ftp_loop (struct url *u, struct url *original_url, char **local_file, int *dt,
                                 ? xstrdup (opt.output_document)
                                 : (con.target ? xstrdup (con.target)
                                    : url_file_name (url_file, NULL)));
-              res = ftp_index (filename, u, f);
+              res = ftp_index (filename, u, f, NULL);
               if (res == FTPOK && opt.verbose)
                 {
                   if (!opt.output_document)
@@ -2838,22 +3672,69 @@ ftp_loop (struct url *u, struct url *original_url, char **local_file, int *dt,
              if we need globbing, time-stamping, recursion or preserve
              permissions.  Its third argument is just what we really need.  */
           res = ftp_retrieve_glob (u, original_url, &con,
-                                   ispattern ? GLOB_GLOBALL : GLOB_GETONE);
+                                   ispattern ? GLOB_GLOBALL : GLOB_GETONE,
+                                   &warc_context, blacklist, luahooks_url);
         }
       else
         {
-          res = ftp_loop_internal (u, original_url, NULL, &con, local_file, false);
+          res = ftp_loop_internal (u, original_url, NULL, &con, local_file,
+                                   false, &warc_context, blacklist, luahooks_url);
         }
     }
   if (res == FTPOK)
     res = RETROK;
   if (res == RETROK)
     *dt |= RETROKF;
+
   /* If a connection was left, quench it.  */
   if (con.csock != -1)
-    fd_close (con.csock);
+    res = close_sock (con.csock, 0, &con, warc_context.ccon_fp, res);
+
+  /* If data is not yet written to the WARC, write it. The last retrieved
+     URL in ftp_loop is written in this way. */
+  if (warc_context.fp != NULL || warc_context.ccon_fp != NULL)
+    {
+      warc_uuid_str (warc_context.record_id_uuid,
+                     sizeof (warc_context.record_id_uuid));
+      warc_uuid_str (warc_context.concurrent_to_uuid,
+                     sizeof (warc_context.concurrent_to_uuid));
+      if (warc_context.fp != NULL)
+        {
+          err_tmp = write_warc_resource (&warc_context, &con);
+          if (err_tmp != RETROK)
+            {
+              res = err_tmp;
+              goto exit;
+            }
+        }
+      if (warc_context.ccon_fp != NULL)
+        {
+          err_tmp = write_warc_cconv (&warc_context, &con);
+          if (err_tmp != RETROK)
+            {
+              res = err_tmp;
+              goto exit;
+            }
+        }
+    }
+
+  if (warc_context.url != NULL)
+    url_free (warc_context.url);
+  if (warc_context.hstatp != NULL)
+    {
+      xfree (warc_context.hstatp->rderrmsg);
+      xfree (warc_context.hstatp->message);
+      xfree (warc_context.hstatp);
+    }
+  xzero (warc_context);
+
   xfree (con.id);
   xfree (con.target);
+
+exit:
+  if (!blacklist_given)
+    string_set_free (blacklist);
+
   return res;
 }
 

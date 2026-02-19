@@ -29,6 +29,9 @@ bool warc_write_resource_record (const char *resource_uuid, const char *url,
 bool warc_write_metadata_record (const char *record_uuid, const char *url,
   const char *timestamp_str, const char *concurrent_to_uuid, ip_address *ip,
   const char *content_type, FILE *body, off_t payload_offset, const char **protocol,
-  const char *cipher_name);
+  const char *cipher_name, const char *session_origin_id, off_t session_number);
+bool warc_write_conversion_record (const char *record_uuid, const char *url,
+  const char *timestamp_str, const char *refers_to, const char *content_type,
+  FILE *body);
 
 #endif /* WARC_H */

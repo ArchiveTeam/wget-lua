@@ -431,6 +431,7 @@ warc_write_block_from_file (FILE *data_in)
     buffer_size = BUFSIZ;
   char buffer[buffer_size];
   size_t s;
+  size_t total_written;
 
   if (fseeko (data_in, 0L, SEEK_END) != 0)
     warc_write_ok = false;
@@ -449,12 +450,16 @@ warc_write_block_from_file (FILE *data_in)
     warc_write_ok = false;
 
   /* Copy the data in the file to the WARC record. */
+  total_written = 0;
   while (warc_write_ok && (s = fread (buffer, 1, buffer_size, data_in)) > 0)
     {
       if (warc_write_buffer (buffer, s) < s)
         warc_write_ok = false;
+      total_written += s;
     }
 
+  if (total_written != content_length_i)
+    warc_write_ok = false;
   return warc_write_ok;
 }
 
@@ -630,10 +635,21 @@ warc_write_date_header (const char *timestamp)
 static bool
 warc_write_ip_header (const ip_address *ip)
 {
+  const char *printed_address;
+
   if (ip != NULL)
-    return warc_write_header ("WARC-IP-Address", print_address (ip));
-  else
-    return warc_write_ok;
+    {
+      printed_address = print_address (ip);
+
+      /* The printed address is an error message starting with `<` in
+         case of bad ip_address data. */
+      if (*printed_address == '<')
+        warc_write_ok = false;
+      else
+        return warc_write_header ("WARC-IP-Address", printed_address);
+    }
+
+  return warc_write_ok;
 }
 
 
@@ -825,6 +841,9 @@ warc_write_digest_headers (FILE *file, long payload_offset)
           warc_write_header ("WARC-Block-Digest",
               warc_base32_sha1_digest (sha1_res_block, digest, sizeof(digest)));
 
+          /* If the payload offset is not negative, the block contains a form
+             of payload, for example from a request or response record for a
+             HTTP URI or a resource record for an FTP URI. */
           if (payload_offset >= 0)
               warc_write_header ("WARC-Payload-Digest",
                   warc_base32_sha1_digest (sha1_res_payload, digest, sizeof(digest)));
@@ -1637,8 +1656,26 @@ warc_find_duplicate_cdx_record (const char *url, const char *sha1_digest_payload
   xfree (key->uri);
   xfree (key);
 
-  if (rec_existing && memcmp (rec_existing->digest, sha1_digest_payload, SHA1_DIGEST_SIZE) == 0
-      && (opt.warc_dedup_url_agnostic || strcmp (rec_existing->uri, url) == 0))
+  if (rec_existing == NULL)
+    return NULL;
+
+  /* Determine if the scheme of the URLs is equal. This is sloppy, as only
+     the first three characters are compared. This is enough to determine
+     if the scheme is one of FTP or of HTTP, which is what this comparison
+     is used for. */
+  bool schemes_equal = (strncmp (rec_existing->uri, url, 3) == 0);
+
+  if (
+      /* Check if the digest is the same. */
+      memcmp (rec_existing->digest, sha1_digest_payload, SHA1_DIGEST_SIZE) == 0
+          /* Check if URL agnostic deduplication is allowed... */
+      && ((opt.warc_dedup_url_agnostic
+              /* Check if scheme agnostic deduplication is allowed... */
+              && (opt.warc_dedup_scheme_agnostic
+              /* ... or if the schemes are the same. */
+                  || schemes_equal))
+          /* ... or if the URLs are the same. */
+          || strcmp (rec_existing->uri, url) == 0))
     return rec_existing;
   else
     return NULL;
@@ -1724,7 +1761,7 @@ warc_write_metadata (void)
   warc_write_metadata_record (manifest_uuid,
                               "metadata://gnu.org/software/wget/warc/MANIFEST.txt",
                               NULL, NULL, NULL, "text/plain",
-                              warc_manifest_fp, -1, NULL, NULL);
+                              warc_manifest_fp, -1, NULL, NULL, NULL, -1);
   /* warc_write_resource_record has closed warc_manifest_fp. */
 
   warc_tmp_fp = warc_tempfile ();
@@ -1910,8 +1947,7 @@ warc_write_request_record (const char *url, const char *timestamp_str,
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   if (!warc_write_protocol (protocol, cipher_name))
     warc_write_ok = false;
-  if (opt.warc_item_name != NULL)
-    warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
+  warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
   warc_write_digest_headers (body, payload_offset);
   warc_write_block_from_file (body);
   warc_write_end_record ();
@@ -1997,17 +2033,18 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
    Calling this function will close body.
    Returns true on success, false on error. */
 static bool
-warc_write_revisit_record (const char *url, const char *timestamp_str,
+warc_write_revisit_record (const char *record_uuid, const char *url, const char *timestamp_str,
                            const char *concurrent_to_uuid, const char *payload_digest,
                            const char *refers_to, const char *refers_to_target_uri,
-                           const char *refers_to_date, const ip_address *ip, FILE *body,
+                           const char *refers_to_date, const ip_address *ip,
+                           const char *content_type, FILE *body,
                            const char **protocol, const char *cipher_name)
 {
-  char revisit_uuid [48];
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
   char sha1_res_block[SHA1_DIGEST_SIZE];
 
-  warc_uuid_str (revisit_uuid, sizeof (revisit_uuid));
+  if (content_type == NULL)
+    content_type = "application/octet-stream";
 
   rewind (body);
   sha1_stream (body, sha1_res_block);
@@ -2015,25 +2052,21 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
 
   warc_write_start_record ();
   warc_write_header ("WARC-Type", "revisit");
-  warc_write_header ("WARC-Record-ID", revisit_uuid);
+  warc_write_header ("WARC-Record-ID", record_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
   if (!warc_write_protocol (protocol, cipher_name))
     warc_write_ok = false;
-  if (refers_to != NULL)
-    warc_write_header ("WARC-Refers-To", refers_to);
-  if (refers_to_target_uri != NULL)
-    warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
-  if (refers_to_date != NULL)
-    warc_write_header ("WARC-Refers-To-Date", refers_to_date);
+  warc_write_header ("WARC-Refers-To", refers_to);
+  warc_write_header ("WARC-Refers-To-Target-URI", refers_to_target_uri);
+  warc_write_header ("WARC-Refers-To-Date", refers_to_date);
   warc_write_header ("WARC-Profile", "http://netpreserve.org/warc/1.1/revisit/identical-payload-digest");
   warc_write_header ("WARC-Truncated", "length");
   warc_write_header ("WARC-Target-URI", url);
   warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
-  if (opt.warc_item_name != NULL)
-    warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
-  warc_write_header ("Content-Type", "application/http;msgtype=response");
+  warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
+  warc_write_header ("Content-Type", content_type);
   warc_write_header ("WARC-Block-Digest", block_digest);
   warc_write_header ("WARC-Payload-Digest", payload_digest);
   warc_write_block_from_file (body);
@@ -2041,6 +2074,128 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
 
   if (fclose (body) != 0)
     warc_write_ok = false;
+
+  return warc_write_ok;
+}
+
+static bool
+warc_possible_revisit_record (const char *record_uuid, const char *url,
+                              const char *timestamp_str,
+                              const char *concurrent_to_uuid, const ip_address *ip,
+                              const char *content_type, FILE *body, off_t payload_offset,
+                              char *sha1_res_payload, char *sha1_res_block,
+                              const char **protocol, const char *cipher_name,
+                              bool *write_revisit)
+{
+  char payload_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
+  bool luahooks_revisit_malloc = false;
+  off_t offset;
+
+  /* Calculate the block and payload digests. */
+  rewind (body);
+
+  if (sha1_stream(body, sha1_res_block) == 0)
+    {
+      /* Decide (based on url + payload digest) if we have seen this
+         data before. */
+      struct warc_dedup_record *rec_existing;
+
+      if (sha1_res_payload == NULL)
+        {
+          if (payload_offset > 0)
+            abort ();
+          sha1_res_payload = sha1_res_block;
+        }
+
+      /* Attempt to find a duplicate of the record. */
+      rec_existing = warc_find_duplicate_cdx_record (url, sha1_res_payload);
+
+      if (rec_existing == NULL)
+        {
+          /* If not duplicate was found, check with the Lua hook. */
+          warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
+          struct luahooks_revisit *revisit_cdx = luahooks_dedup_response (url, payload_digest);
+          if(revisit_cdx != NULL)
+            {
+              rec_existing = xmalloc (sizeof (struct warc_dedup_record));
+
+              rec_existing->uri = revisit_cdx->target_uri;
+              rec_existing->date = revisit_cdx->date;
+              rec_existing->uuid = revisit_cdx->response_uuid;
+              memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
+
+              xfree(revisit_cdx);
+              luahooks_revisit_malloc = true;
+            }
+        }
+
+      if (rec_existing != NULL)
+        {
+          /* Check the size of the payload in case a minimum number of
+             bytes is set for the payload to deduplicate. */
+          if (opt.warc_dedup_min_size > 0)
+            {
+              if (fseeko (body, 0L, SEEK_END) != 0)
+                {
+                  warc_write_ok = false;
+                  return false;
+                }
+              offset = ftello (body);
+              if (offset < 0)
+                {
+                  warc_write_ok = false;
+                  return false;
+                }
+              *write_revisit = ((offset - payload_offset) >= opt.warc_dedup_min_size);
+              if (fseeko (body, 0L, SEEK_SET) != 0)
+                {
+                  warc_write_ok = false;
+                  return false;
+                }
+            }
+          else
+            *write_revisit = true;
+
+          /* If the payload is large enough, write a revisit record. */
+          if (*write_revisit)
+            {
+              bool result;
+
+              /* Found an existing record. */
+              logprintf (LOG_VERBOSE,
+          _("Found exact match in CDX file or a LUA hook. Saving revisit record to WARC.\n"));
+
+              /* Remove the payload from the file. */
+              if ((payload_offset > 0 || sha1_res_payload == sha1_res_block)
+                  && ftruncate (fileno (body), payload_offset) == -1)
+                {
+                  warc_write_ok = false;
+                  return false;
+                }
+
+              /* Send the original payload digest. */
+              warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
+              result = warc_write_revisit_record (record_uuid, url, timestamp_str,
+                         concurrent_to_uuid, payload_digest, rec_existing->uuid,
+                         rec_existing->uri, rec_existing->date, ip, content_type,
+                         body, protocol, cipher_name);
+              if (luahooks_revisit_malloc == true)
+                xfree (rec_existing);
+              return result;
+            }
+        }
+    }
+  else
+    {
+      warc_write_ok = false;
+      return false;
+    }
+
+  if (sha1_res_block == NULL)
+    {
+      warc_write_ok = false;
+      return false;
+    }
 
   return warc_write_ok;
 }
@@ -2072,8 +2227,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   char response_uuid [48];
   const char *date;
   off_t offset;
-  bool write_revisit;
-  bool luahooks_revisit_malloc = false;
+  bool write_revisit = false;
 
   if (sha1_res_payload == NULL)
     {
@@ -2081,106 +2235,28 @@ warc_write_response_record (const char *url, const char *timestamp_str,
       return false;
     }
 
+  warc_uuid_str (response_uuid, sizeof (response_uuid));
+
   if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
-      /* Calculate the block and payload digests. */
-      rewind (body);
-
-      if (sha1_stream(body, sha1_res_block) == 0)
-        {
-          /* Decide (based on url + payload digest) if we have seen this
-             data before. */
-          struct warc_dedup_record *rec_existing;
-          rec_existing = warc_find_duplicate_cdx_record (url, sha1_res_payload);
-
-          if (rec_existing == NULL){
-            warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-            struct luahooks_revisit *revisit_cdx = luahooks_dedup_response (url, payload_digest);
-            if(revisit_cdx != NULL) {
-              rec_existing = xmalloc (sizeof (struct warc_dedup_record));
-
-              rec_existing->uri = revisit_cdx->target_uri;
-              rec_existing->date = revisit_cdx->date;
-              rec_existing->uuid = revisit_cdx->response_uuid;
-              memcpy (rec_existing->digest, sha1_res_payload, SHA1_DIGEST_SIZE);
-
-              xfree(revisit_cdx);
-              luahooks_revisit_malloc = true;
-            }  
-          }
-
-          if (rec_existing != NULL)
-            {
-              /* Check the size of the payload in case a minimum number of
-                 bytes is set for the payload to deduplicate. */
-              if (opt.warc_dedup_min_size > 0)
-                {
-                  if (fseeko (body, 0L, SEEK_END) != 0)
-                    {
-                      warc_write_ok = false;
-                      return false;
-                    }
-                  offset = ftello (body);
-                  if (offset < 0)
-                    {
-                      warc_write_ok = false;
-                      return false;
-                    }
-                  write_revisit = ((offset - payload_offset) >= opt.warc_dedup_min_size);
-                  if (fseeko (body, 0L, SEEK_SET) != 0)
-                    {
-                      warc_write_ok = false;
-                      return false;
-                    }
-                }
-              else
-                write_revisit = true;
-
-              /* If the payload is large enough, write a revisit record. */
-              if (write_revisit)
-                {
-                  bool result;
-
-                  /* Found an existing record. */
-                  logprintf (LOG_VERBOSE,
-              _("Found exact match in CDX file or a LUA hook. Saving revisit record to WARC.\n"));
-
-                  /* Remove the payload from the file. */
-                  if (payload_offset > 0 && ftruncate (fileno (body), payload_offset) == -1)
-                    {
-                      warc_write_ok = false;
-                      return false;
-                    }
-
-                  /* Send the original payload digest. */
-                  warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-                  result = warc_write_revisit_record (url, timestamp_str,
-                             concurrent_to_uuid, payload_digest, rec_existing->uuid,
-                             rec_existing->uri, rec_existing->date, ip, body, protocol, cipher_name);
-                  if (luahooks_revisit_malloc == true) xfree(rec_existing);
-                  return result;
-                }
-            }
-          warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
-          warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
-        }
-      else
+      if (!warc_possible_revisit_record (response_uuid, url, timestamp_str,
+                                    concurrent_to_uuid, ip, "application/http;msgtype=response",
+                                    body, payload_offset,
+                                    sha1_res_payload, sha1_res_block, protocol,
+                                    cipher_name, &write_revisit))
         {
           warc_write_ok = false;
           return false;
         }
-    }
 
-  if (sha1_res_block == NULL)
-    {
-      warc_write_ok = false;
-      return false;
+      if (write_revisit)
+        return warc_write_ok;
+
+      warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
+      warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
     }
 
   /* Not a revisit, just store the record. */
-
-  warc_uuid_str (response_uuid, sizeof (response_uuid));
-
   if (fseeko (warc_current_file, 0L, SEEK_END) != 0)
     {
       warc_write_ok = false;
@@ -2206,8 +2282,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   warc_write_ip_header (ip);
   warc_write_header ("WARC-Block-Digest", block_digest);
   warc_write_header ("WARC-Payload-Digest", payload_digest);
-  if (opt.warc_item_name != NULL)
-    warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
+  warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
   warc_write_header ("Content-Type", "application/http;msgtype=response");
   warc_write_block_from_file (body);
   warc_write_end_record ();
@@ -2247,12 +2322,14 @@ warc_write_response_record (const char *url, const char *timestamp_str,
 static bool
 warc_write_record (const char *record_type, const char *resource_uuid,
                  const char *url, const char *timestamp_str,
-                 const char *concurrent_to_uuid,
+                 const char *concurrent_to_uuid, const char *refers_to_uuid,
                  const ip_address *ip, const char *content_type, FILE *body,
                  off_t payload_offset, const char **protocol,
-                 const char *cipher_name)
+                 const char *cipher_name, const char *session_origin_id,
+                 off_t session_number)
 {
   char uuid_buf[48];
+  char session_number_s[MAX_INT_TO_STRING_LEN(off_t)];
 
   if (resource_uuid == NULL)
     {
@@ -2266,14 +2343,24 @@ warc_write_record (const char *record_type, const char *resource_uuid,
   warc_write_start_record ();
   warc_write_header ("WARC-Type", record_type);
   warc_write_header ("WARC-Record-ID", resource_uuid);
+  warc_write_header ("WARC-Refers-To", refers_to_uuid);
   warc_write_header ("WARC-Warcinfo-ID", warc_current_warcinfo_uuid_str);
   warc_write_header ("WARC-Concurrent-To", concurrent_to_uuid);
+  if (session_origin_id != NULL)
+    {
+      warc_write_header ("WARC-Session-Origin-ID", session_origin_id);
+      if (session_number < 1)
+        warc_write_ok = false;
+      number_to_string (session_number_s, session_number);
+      warc_write_header ("WARC-Session-Number", session_number_s);
+    }
   if (!warc_write_protocol (protocol, cipher_name))
     warc_write_ok = false;
   warc_write_header ("WARC-Target-URI", url);
   warc_write_date_header (timestamp_str);
   warc_write_ip_header (ip);
   warc_write_digest_headers (body, payload_offset);
+  warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
   warc_write_header ("Content-Type", content_type);
   warc_write_block_from_file (body);
   warc_write_end_record ();
@@ -2302,9 +2389,62 @@ warc_write_resource_record (const char *resource_uuid, const char *url,
                  off_t payload_offset, const char **protocol,
                  const char *cipher_name)
 {
-  return warc_write_record ("resource",
-      resource_uuid, url, timestamp_str, concurrent_to_uuid,
-      ip, content_type, body, payload_offset, protocol, cipher_name);
+  char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
+  char sha1_res_block[SHA1_DIGEST_SIZE] = {0};
+  const char *date;
+  char *current_timestamp;
+  bool write_revisit = false;
+
+  bool is_web_resource = (strncmp (url, "ftp://", 6) == 0
+                          || strncmp (url, "ftps://", 7) == 0
+                          || strncmp (url, "http://", 7) == 0
+                          || strncmp (url, "https://", 8) == 0);
+
+  if (is_web_resource && (opt.warc_digests_enabled || !opt.warc_dedup_disable))
+    {
+      if (!warc_possible_revisit_record (resource_uuid, url, timestamp_str,
+                                    concurrent_to_uuid, ip, content_type,
+                                    body, payload_offset,
+                                    NULL, sha1_res_block, protocol,
+                                    cipher_name, &write_revisit))
+        {
+          warc_write_ok = false;
+          return false;
+        }
+
+      if (write_revisit)
+        return warc_write_ok;
+
+      warc_base32_sha1_digest (sha1_res_block, block_digest, sizeof(block_digest));
+    }
+
+  if (!warc_write_record ("resource",
+      resource_uuid, url, timestamp_str, concurrent_to_uuid, NULL,
+      ip, content_type, body, payload_offset, protocol, cipher_name, NULL, -1))
+    {
+      warc_write_ok = false;
+      return false;
+    }
+
+  if (is_web_resource && !opt.warc_dedup_disable)
+    {
+      char *date = xmalloc (21);
+      warc_timestamp (date, 21);
+      store_warc_record (url, date, resource_uuid, sha1_res_block);
+      xfree (date);
+    }
+
+  return warc_write_ok;
+}
+
+bool
+warc_write_conversion_record (const char *record_uuid, const char *url,
+                 const char *timestamp_str, const char *refers_to,
+                 const char *content_type, FILE *body)
+{
+  return warc_write_record ("conversion",
+      record_uuid, url, timestamp_str, NULL, refers_to, NULL,
+      content_type, body, -1, NULL, NULL, NULL, -1);
 }
 
 /* Writes a metadata record to the WARC file.
@@ -2323,9 +2463,11 @@ warc_write_metadata_record (const char *record_uuid, const char *url,
                  const char *timestamp_str, const char *concurrent_to_uuid,
                  ip_address *ip, const char *content_type, FILE *body,
                  off_t payload_offset, const char **protocol,
-                 const char *cipher_name)
+                 const char *cipher_name, const char *session_origin_id,
+                 off_t session_number)
 {
   return warc_write_record ("metadata",
-      record_uuid, url, timestamp_str, concurrent_to_uuid,
-      ip, content_type, body, payload_offset, protocol, cipher_name);
+      record_uuid, url, timestamp_str, concurrent_to_uuid, NULL,
+      ip, content_type, body, payload_offset, protocol, cipher_name,
+      session_origin_id, session_number);
 }

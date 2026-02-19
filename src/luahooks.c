@@ -2,6 +2,7 @@
 
 #include "wget.h"
 #include "http.h"
+#include "ftp.h"
 #include "url.h"
 #include "convert.h"
 #include "iri.h"
@@ -298,7 +299,7 @@ luahooks_init ()
 
 #define CONST_CASE(KEY) case KEY : return #KEY ;
 
-static char *
+const char *
 uerr_to_string (const uerr_t v)
 {
   switch (v)
@@ -366,6 +367,7 @@ uerr_to_string (const uerr_t v)
       CONST_CASE (METALINK_MISSING_RESOURCE)
       CONST_CASE (RETR_WITH_METALINK)
       CONST_CASE (IP_REJECTED)
+      CONST_CASE (METALINK_SIZE_ERROR)
     }
   return NULL;
 }
@@ -380,6 +382,9 @@ url_scheme_to_string (const enum url_scheme v)
       CONST_CASE (SCHEME_HTTPS)
 #endif
       CONST_CASE (SCHEME_FTP)
+#ifdef HAVE_SSL
+      CONST_CASE (SCHEME_FTPS)
+#endif
       CONST_CASE (SCHEME_INVALID)
     }
   return NULL;
@@ -404,6 +409,47 @@ reject_reason_to_string (const reject_reason v)
       CONST_CASE (WG_RR_ROBOTS)
       CONST_CASE (WG_RR_LUAHOOK)
       CONST_CASE (WG_RR_IGNORE)
+    }
+  return NULL;
+}
+
+static char *
+ftp_reject_reason_to_string (const ftp_reject_reason v)
+{
+  switch (v)
+    {
+      CONST_CASE (FTP_RR_SUCCESS)
+      CONST_CASE (FTP_RR_NOTACCEPTABLE)
+      CONST_CASE (FTP_RR_INSECURENAME)
+      CONST_CASE (FTP_RR_INVALID)
+      CONST_CASE (FTP_RR_REGEX)
+      CONST_CASE (FTP_RR_GLOB)
+      CONST_CASE (FTP_RR_LUAHOOK)
+      CONST_CASE (FTP_RR_BLACKLIST)
+    }
+  return NULL;
+}
+
+static char *
+ftype_to_string (const enum ftype type)
+{
+  switch (type)
+    {
+      CONST_CASE (FT_PLAINFILE)
+      CONST_CASE (FT_DIRECTORY)
+      CONST_CASE (FT_SYMLINK)
+      CONST_CASE (FT_UNKNOWN)
+    }
+  return NULL;
+}
+
+static char *
+parsetype_to_string (enum parsetype ptype)
+{
+  switch (ptype)
+    {
+      CONST_CASE (TT_HOUR_MIN)
+      CONST_CASE (TT_DAY)
     }
   return NULL;
 }
@@ -495,7 +541,27 @@ http_stat_to_lua_table (const struct http_stat *hs)
 }
 
 static void
-url_to_lua_table (const struct url *u)
+fileinfo_to_lua_table (const struct fileinfo *fi)
+{
+  if (fi == NULL)
+    {
+      lua_pushnil (lua);
+    }
+  else
+    {
+      lua_createtable (lua, 0, 7);
+      luahooks_push_string_to_table ("type", ftype_to_string (fi->type));
+      LUA_PUSH_FROM_STRUCT (string, fi, name);
+      LUA_PUSH_FROM_STRUCT (integer, fi, size);
+      LUA_PUSH_FROM_STRUCT (integer, fi, tstamp);
+      luahooks_push_string_to_table ("ptype", parsetype_to_string (fi->ptype));
+      LUA_PUSH_FROM_STRUCT (integer, fi, perms);
+      LUA_PUSH_FROM_STRUCT (string, fi, linkto);
+    }
+}
+
+static void
+url_to_lua_table (const struct url *u, const struct fileinfo *fi)
 {
   if (u == NULL)
     {
@@ -517,11 +583,16 @@ url_to_lua_table (const struct url *u)
       LUA_PUSH_FROM_STRUCT (string,  u, file);
       LUA_PUSH_FROM_STRUCT (string,  u, user);
       LUA_PUSH_FROM_STRUCT (string,  u, passwd);
+      if (fi != NULL)
+        {
+          fileinfo_to_lua_table (fi);
+          lua_setfield (lua, -2, "fileinfo");
+        }
     }
 }
 
 static void
-urlpos_to_lua_table (const struct urlpos *upos)
+urlpos_to_lua_table (const struct urlpos *upos, const struct fileinfo *fi)
 {
   if (upos == NULL)
     {
@@ -531,7 +602,7 @@ urlpos_to_lua_table (const struct urlpos *upos)
     {
       /* Create a table for 10 elements. */
       lua_createtable (lua, 0, 10);
-      url_to_lua_table (upos->url);
+      url_to_lua_table (upos->url, fi);
       lua_setfield (lua, -2, "url");
       LUA_PUSH_FROM_STRUCT (string,  upos, local_name);
       LUA_PUSH_FROM_STRUCT (integer, upos, ignore_when_downloading);
@@ -576,6 +647,9 @@ luahooks_lookup_host (const char *host)
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "lookup_host"))
     return NULL;
 
+  if (host == NULL)
+    abort ();
+
   lua_pushstring (lua, host);
 
   int res = lua_pcall (lua, 1, 1, DEBUG_TRACEBACK_INDEX);
@@ -602,13 +676,52 @@ luahooks_lookup_host (const char *host)
 }
 #undef MAX_HOST_LENGTH
 
+struct http_stat *
+convert_http_stat_partial (struct http_stat_partial *hsp)
+{
+  struct http_stat *hs = xnew0 (struct http_stat);
+
+  hs->len = hsp->len;
+  hs->contlen = hsp->contlen;
+  hs->restval = hsp->restval;
+  hs->res = hsp->res;
+  hs->rderrmsg = hsp->rderrmsg;
+  hs->statcode = hsp->statcode;
+  hs->message = hsp->message;
+  hs->rd_size = hsp->rd_size;
+  hs->dltime = hsp->dltime;
+  hs->local_file = hsp->local_file;
+  hs->local_encoding = ENC_NONE;
+  hs->remote_encoding = ENC_NONE;
+
+  return hs;
+}
+
+luahook_action_t
+luahooks_httploop_result_ftp (const struct url *url, const uerr_t err, struct http_stat_partial *hstatp)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "httploop_result"))
+    return LUAHOOK_NOTHING;
+
+  struct http_stat *hs = convert_http_stat_partial (hstatp);
+
+  luahook_action_t result = luahooks_httploop_result (url, err, hs);
+
+  xfree (hs);
+
+  return result;
+}
+
 luahook_action_t
 luahooks_httploop_result (const struct url *url, const uerr_t err, const struct http_stat *hstat)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "httploop_result"))
     return LUAHOOK_NOTHING;
 
-  url_to_lua_table (url);
+  if (url == NULL || hstat == NULL)
+    abort ();
+
+  url_to_lua_table (url, NULL);
   lua_pushstring (lua, uerr_to_string (err));
   http_stat_to_lua_table (hstat);
 
@@ -628,12 +741,33 @@ luahooks_httploop_result (const struct url *url, const uerr_t err, const struct 
 }
 
 bool
+luahooks_write_to_warc_ftp (const struct url *url, struct http_stat_partial *hstatp)
+{
+  if (lua == NULL || !luahooks_function_lookup ("callbacks", "write_to_warc"))
+    return true;
+
+  char *temp = hstatp->local_file;
+  hstatp->local_file = "";
+  struct http_stat *hs = convert_http_stat_partial (hstatp);
+  hstatp->local_file = temp;
+
+  bool result = luahooks_write_to_warc (url, hs);
+
+  xfree (hs);
+
+  return result;
+}
+
+bool
 luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "write_to_warc"))
     return true;
 
-  url_to_lua_table (url);
+  if (url == NULL || hstat == NULL)
+    abort ();
+
+  url_to_lua_table (url, NULL);
   http_stat_to_lua_table (hstat);
 
   int res = lua_pcall (lua, 2, 1, DEBUG_TRACEBACK_INDEX);
@@ -650,10 +784,14 @@ luahooks_write_to_warc (const struct url *url, const struct http_stat *hstat)
     }
 }
 
-struct luahooks_revisit *luahooks_dedup_response (const char *url, char *digest)
+struct luahooks_revisit *
+luahooks_dedup_response (const char *url, char *digest)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "dedup_response"))
     return NULL;
+
+  if (url == NULL || digest == NULL)
+    abort ();
 
   lua_pushstring (lua, url);
   lua_pushstring (lua, digest);
@@ -703,6 +841,67 @@ struct luahooks_revisit *luahooks_dedup_response (const char *url, char *digest)
 
 
 bool
+luahooks_download_child_ftp (const struct fileinfo *f, struct url *parent,
+                             const struct url *start_url_parsed, ftp_reject_reason reason)
+{
+  bool verdict = (reason == FTP_RR_SUCCESS);
+
+  if (lua == NULL || (!luahooks_function_lookup ("callbacks", "download_child_p")
+                      && !luahooks_function_lookup ("callbacks", "download_child")))
+    return verdict;
+
+  if (f == NULL || parent == NULL || start_url_parsed == NULL)
+    abort ();
+
+  struct urlpos upos;
+  xzero (upos);
+
+  struct url *current_url = url_copy (parent);
+  if (f->type == FT_DIRECTORY)
+    {
+      int dirlen = strlen (current_url->dir);
+      char *newdir = concat_strings (current_url->dir,
+               (dirlen == 0 || (dirlen == 1 && *(current_url->dir) == '/')) ? "" : "/",
+               f->name, (char *) 0);
+      url_set_file (current_url, "");
+      url_set_dir (current_url, newdir);
+      xfree (newdir);
+    }
+  else
+    url_set_file (current_url, f->name);
+  upos.url = current_url;
+
+  struct url *current_parent = url_copy (parent);
+  url_set_file (current_parent, "");
+
+  urlpos_to_lua_table (&upos, f);
+  url_to_lua_table (current_parent, NULL);
+  lua_pushinteger (lua, -1);
+  url_to_lua_table (start_url_parsed, NULL);
+  lua_createtable (lua, 0, 0); // iri
+  lua_pushboolean (lua, verdict);
+  lua_pushstring (lua, ftp_reject_reason_to_string (reason));
+
+  int res = lua_pcall (lua, 7, 1, DEBUG_TRACEBACK_INDEX);
+
+  url_free (current_url);
+  url_free (current_parent);
+
+  if (res != 0)
+    {
+      handle_lua_error (res);
+      return verdict;
+    }
+  else
+    {
+      bool answer = lua_toboolean (lua, -1);
+      lua_pop (lua, 1);
+      return answer;
+    }
+}
+
+
+bool
 luahooks_download_child (const struct urlpos *upos, struct url *parent, int depth,
                          struct url *start_url_parsed, struct iri *iri,
                          reject_reason reason)
@@ -720,10 +919,13 @@ luahooks_download_child (const struct urlpos *upos, struct url *parent, int dept
   else
     return verdict;
 
-  urlpos_to_lua_table (upos);
-  url_to_lua_table (parent);
+  if (upos == NULL || parent == NULL || start_url_parsed == NULL)
+    abort ();
+
+  urlpos_to_lua_table (upos, NULL);
+  url_to_lua_table (parent, NULL);
   lua_pushinteger (lua, depth);
-  url_to_lua_table (start_url_parsed);
+  url_to_lua_table (start_url_parsed, NULL);
   iri_to_lua_table (iri);
   lua_pushboolean (lua, verdict);
   lua_pushstring (lua, reason_string);
@@ -752,16 +954,28 @@ luahooks_can_generate_urls ()
 }
 
 struct luahooks_url *
+luahooks_get_urls_ftp (const char *file, const char *url)
+{
+  return luahooks_get_urls (file, url, false, NULL);
+}
+
+struct luahooks_url *
 luahooks_get_urls (const char *file, const char *url, bool is_css,
                    struct iri *iri)
 {
   if (lua == NULL || !luahooks_function_lookup ("callbacks", "get_urls"))
     return NULL;
 
+  if (file == NULL || url == NULL)
+    abort ();
+
   lua_pushstring (lua, file);
   lua_pushstring (lua, url);
   lua_pushboolean (lua, is_css);
-  iri_to_lua_table (iri);
+  if (iri == NULL)
+    lua_createtable (lua, 0, 0); // iri
+  else
+    iri_to_lua_table (iri);
 
   int res = lua_pcall (lua, 4, 1, DEBUG_TRACEBACK_INDEX);
   if (res != 0)

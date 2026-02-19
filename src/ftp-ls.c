@@ -42,6 +42,7 @@ as that of the covered work.  */
 #include "convert.h"            /* for html_quote_string prototype */
 #include "retr.h"               /* for output_stream */
 #include "c-strcase.h"
+#include "warc.h"
 
 /* Converts symbolic permissions to number-style ones, e.g. string
    rwxr-xr-x to 755.  For now, it knows nothing of
@@ -1054,7 +1055,8 @@ Unsupported listing type, trying Unix listing parser.\n"));
    directories and files on the appropriate host.  The references are
    FTP.  */
 uerr_t
-ftp_index (const char *file, struct url *u, struct fileinfo *f)
+ftp_index (const char *file, struct url *u, struct fileinfo *f,
+           struct warc_context *warc_context)
 {
   FILE *fp;
   char *upwd;
@@ -1062,17 +1064,33 @@ ftp_index (const char *file, struct url *u, struct fileinfo *f)
   char *htclfile;               /* HTML-clean file name */
   char *urlclfile;              /* URL-clean file name */
 
-  if (!output_stream)
+  /* Only one file can be written to at the same time. */
+  if ((file == NULL && warc_context == NULL)
+      || (file != NULL && warc_context != NULL))
+    return WARC_ERR;
+
+  if (file != NULL)
     {
-      fp = fopen (file, "wb");
-      if (!fp)
+      if (!output_stream)
         {
-          logprintf (LOG_NOTQUIET, "%s: %s\n", file, strerror (errno));
-          return FOPENERR;
+          fp = fopen (file, "wb");
+          if (!fp)
+            {
+              logprintf (LOG_NOTQUIET, "%s: %s\n", file, strerror (errno));
+              return FOPENERR;
+            }
         }
+      else
+        fp = output_stream;
     }
-  else
-    fp = output_stream;
+  else if (warc_context != NULL)
+    {
+      warc_context->html_fp = warc_tempfile ();
+      if (warc_context->html_fp == NULL)
+        return WARC_TMP_FOPENERR;
+      fp = warc_context->html_fp;
+    }
+
   if (u->user)
     {
       char *tmpu, *tmpp;        /* temporary, clean user and passwd */
@@ -1167,7 +1185,7 @@ ftp_index (const char *file, struct url *u, struct fileinfo *f)
   fprintf (fp, "</pre>\n</body>\n</html>\n");
   xfree (htcldir);
   xfree (upwd);
-  if (!output_stream)
+  if (file != NULL && !output_stream)
     fclose (fp);
   else
     fflush (fp);
