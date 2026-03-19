@@ -52,8 +52,8 @@ as that of the covered work.  */
 #endif
 #endif
 
-/* Is OpenSSL or GNUTLS available? */
-#if defined HAVE_LIBSSL || defined HAVE_LIBSSL32 || defined HAVE_LIBGNUTLS
+/* Is OpenSSL, GNUTLS or NSS available? */
+#if defined HAVE_LIBSSL || defined HAVE_LIBSSL32 || defined HAVE_LIBGNUTLS || defined HAVE_LIBNSS
 # define HAVE_SSL
 # define HAVE_HSTS /* There's no sense in enabling HSTS without SSL */
 #endif

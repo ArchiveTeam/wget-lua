@@ -1048,6 +1048,24 @@ warc_write_warcinfo_record (const char *filename)
       }
   }
 
+  if (opt.http_impersonate
+      && fprintf (warc_tmp, "wget-at-http-impersonate-profile: %s\r\n",
+                  opt.http_impersonate) < 0)
+    {
+      warc_write_ok = false;
+      return false;
+    }
+
+#ifdef HAVE_SSL
+  if (opt.tls_impersonate
+      && fprintf (warc_tmp, "wget-at-tls-impersonate-profile: %s\r\n",
+                  opt.tls_impersonate) < 0)
+    {
+      warc_write_ok = false;
+      return false;
+    }
+#endif
+
   /* Add the user headers, if any. */
   if (opt.warc_user_headers)
     {
@@ -1999,6 +2017,7 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
 static bool
 warc_write_revisit_record (const char *url, const char *timestamp_str,
                            const char *concurrent_to_uuid, const char *payload_digest,
+                           const char *payload_digest_decoded,
                            const char *refers_to, const char *refers_to_target_uri,
                            const char *refers_to_date, const ip_address *ip, FILE *body,
                            const char **protocol, const char *cipher_name)
@@ -2036,6 +2055,7 @@ warc_write_revisit_record (const char *url, const char *timestamp_str,
   warc_write_header ("Content-Type", "application/http;msgtype=response");
   warc_write_header ("WARC-Block-Digest", block_digest);
   warc_write_header ("WARC-Payload-Digest", payload_digest);
+  warc_write_header ("X-Wget-AT-Decoded-Payload-Digest", payload_digest_decoded);
   warc_write_block_from_file (body);
   warc_write_end_record ();
 
@@ -2063,11 +2083,13 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                             const char *concurrent_to_uuid, const ip_address *ip,
                             FILE *body, off_t payload_offset, const char *mime_type,
                             int response_code, const char *redirect_location,
-                            char *sha1_res_payload, const char **protocol,
+                            char *sha1_res_payload, char *sha1_res_payload_decoded,
+                            const char **protocol,
                             const char *cipher_name)
 {
   char block_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
   char payload_digest[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
+  char payload_digest_decoded[BASE32_LENGTH(SHA1_DIGEST_SIZE) + 1 + 5];
   char sha1_res_block[SHA1_DIGEST_SIZE] = {0};
   char response_uuid [48];
   const char *date;
@@ -2080,6 +2102,12 @@ warc_write_response_record (const char *url, const char *timestamp_str,
       warc_write_ok = false;
       return false;
     }
+
+  if (sha1_res_payload_decoded != NULL)
+    warc_base32_sha1_digest (sha1_res_payload_decoded, payload_digest_decoded,
+                             sizeof (payload_digest_decoded));
+  else
+    payload_digest_decoded[0] = '\0';
 
   if (opt.warc_digests_enabled || !opt.warc_dedup_disable)
     {
@@ -2155,8 +2183,9 @@ warc_write_response_record (const char *url, const char *timestamp_str,
                   /* Send the original payload digest. */
                   warc_base32_sha1_digest (sha1_res_payload, payload_digest, sizeof(payload_digest));
                   result = warc_write_revisit_record (url, timestamp_str,
-                             concurrent_to_uuid, payload_digest, rec_existing->uuid,
-                             rec_existing->uri, rec_existing->date, ip, body, protocol, cipher_name);
+                             concurrent_to_uuid, payload_digest,
+                             payload_digest_decoded, rec_existing->uuid,
+                             rec_existing->uri, rec_existing->date, ip, body,protocol, cipher_name);
                   if (luahooks_revisit_malloc == true) xfree(rec_existing);
                   return result;
                 }
@@ -2206,6 +2235,7 @@ warc_write_response_record (const char *url, const char *timestamp_str,
   warc_write_ip_header (ip);
   warc_write_header ("WARC-Block-Digest", block_digest);
   warc_write_header ("WARC-Payload-Digest", payload_digest);
+  warc_write_header ("X-Wget-AT-Decoded-Payload-Digest", payload_digest_decoded);
   if (opt.warc_item_name != NULL)
     warc_write_header ("X-Wget-AT-Project-Item-Name", opt.warc_item_name);
   warc_write_header ("Content-Type", "application/http;msgtype=response");

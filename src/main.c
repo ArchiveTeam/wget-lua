@@ -332,7 +332,9 @@ static struct cmdline_option option_data[] =
     IF_SSL ( "ftps-clear-data-connection", 0, OPT_BOOLEAN, "ftpscleardataconnection", -1 )
     IF_SSL ( "ftps-fallback-to-ftp", 0, OPT_BOOLEAN, "ftpsfallbacktoftp", -1 )
     IF_SSL ( "ftps-implicit", 0, OPT_BOOLEAN, "ftpsimplicit", -1 )
-    IF_SSL ( "ftps-resume-ssl", 0, OPT_BOOLEAN, "ftpsresumessl", -1 )
+#if defined(HAVE_SSL) && !defined(HAVE_LIBNSS)
+    { "ftps-resume-ssl", 0, OPT_BOOLEAN, "ftpsresumessl", -1 },
+#endif
     { "glob", 0, OPT_BOOLEAN, "glob", -1 },
     { "header", 0, OPT_VALUE, "header", -1 },
     { "help", 'h', OPT_FUNCALL, (void *)print_help, no_argument },
@@ -347,6 +349,7 @@ static struct cmdline_option option_data[] =
 #endif
     { "html-extension", 'E', OPT_BOOLEAN, "adjustextension", -1 }, /* deprecated */
     { "htmlify", 0, OPT_BOOLEAN, "htmlify", -1 },
+    { "http-impersonate", 0, OPT_VALUE, "httpimpersonate", -1 },
     { "http-keep-alive", 0, OPT_BOOLEAN, "httpkeepalive", -1 },
     { "http-passwd", 0, OPT_VALUE, "httppassword", -1 }, /* deprecated */
     { "http-password", 0, OPT_VALUE, "httppassword", -1 },
@@ -355,6 +358,9 @@ static struct cmdline_option option_data[] =
     { "ignore-case", 0, OPT_BOOLEAN, "ignorecase", -1 },
     { "ignore-length", 0, OPT_BOOLEAN, "ignorelength", -1 },
     { "ignore-tags", 0, OPT_VALUE, "ignoretags", -1 },
+#ifdef HAVE_LIBNSS
+    { "impersonate", 0, OPT_VALUE, "impersonate", -1 },
+#endif
     { "include-directories", 'I', OPT_VALUE, "includedirectories", -1 },
 #ifdef ENABLE_IPV6
     { "inet4-only", '4', OPT_BOOLEAN, "inet4only", -1 },
@@ -450,6 +456,9 @@ static struct cmdline_option option_data[] =
     { "timeout", 'T', OPT_VALUE, "timeout", -1 },
     { "timestamping", 'N', OPT_BOOLEAN, "timestamping", -1 },
     { "if-modified-since", 0, OPT_BOOLEAN, "ifmodifiedsince", -1 },
+#ifdef HAVE_LIBNSS
+    { "tls-impersonate", 0, OPT_VALUE, "tlsimpersonate", -1 },
+#endif
     { "tries", 't', OPT_VALUE, "tries", -1 },
     { "truncate-output", 0, OPT_BOOLEAN, "truncateoutput", -1 },
     { "unlink", 0, OPT_BOOLEAN, "unlink", -1 },
@@ -847,7 +856,17 @@ HTTP options:\n"),
        --header=STRING             insert STRING among the headers\n"),
 #ifdef HAVE_LIBZ
     N_("\
-       --compression=TYPE          choose compression, one of auto, gzip and none. (default: none)\n"),
+       --compression=TYPE          choose compression, one of auto, gzip, deflate"
+#ifdef HAVE_NCOMPRESS
+       ", compress"
+#endif
+#ifdef HAVE_BROTLI
+       ", br"
+#endif
+#ifdef HAVE_ZSTD
+       ", zstd"
+#endif
+       " and none. (default: none)\n"),
 #endif
     N_("\
        --max-redirect              maximum redirections allowed per page\n"),
@@ -859,6 +878,14 @@ HTTP options:\n"),
        --referer=URL               include 'Referer: URL' header in HTTP request\n"),
     N_("\
        --save-headers              save the HTTP headers to file\n"),
+    N_("\
+       --http-impersonate=PROFILE  impersonate HTTP headers, currently firefox148-h1\n"),
+#ifdef HAVE_LIBNSS
+    N_("\
+       --impersonate=PROFILE       impersonate HTTP headers and TLS, currently firefox148-h1\n"),
+    N_("\
+       --tls-impersonate=NAME      impersonate a TLS client fingerprint, currently firefox148-h1\n"),
+#endif
     N_("\
   -U,  --user-agent=AGENT          identify as AGENT instead of Wget/VERSION\n"),
     N_("\
@@ -911,7 +938,8 @@ HTTPS (SSL/TLS) options:\n"),
     N_("\
        --private-key=FILE          private key file\n"),
     N_("\
-       --private-key-type=TYPE     private key type, PEM or DER\n"),
+       --private-key-type=TYPE     private key type, PEM or DER\n\
+                                   (PKCS#8 DER with NSS)\n"),
     N_("\
        --ca-certificate=FILE       file with the bundle of CAs\n"),
     N_("\
@@ -933,7 +961,8 @@ HTTPS (SSL/TLS) options:\n"),
 #endif
     "\n",
     N_("\
-       --ciphers=STR           Set the priority string (GnuTLS) or cipher list string (OpenSSL) directly.\n\
+       --ciphers=STR           Set the priority string (GnuTLS) or cipher list string (OpenSSL) directly,\n\
+                                   or cipher list separated by \",\" for NSS.\n\
                                    Use with care. This option overrides --secure-protocol.\n\
                                    The format and syntax of this string depend on the specific SSL/TLS engine.\n"),
 #endif /* HAVE_SSL */
@@ -975,9 +1004,11 @@ FTP options:\n"),
 FTPS options:\n"),
     N_("\
        --ftps-implicit                 use implicit FTPS (default port is 990)\n"),
+#ifndef HAVE_LIBNSS
     N_("\
        --ftps-resume-ssl               resume the SSL/TLS session started in the control connection when\n"
         "                                         opening a data connection\n"),
+#endif
     N_("\
        --ftps-clear-data-connection    cipher the control channel only; all the data will be in plaintext\n"),
     N_("\
@@ -1700,6 +1731,89 @@ main (int argc, char **argv)
       print_usage (1);
       exit (WGET_EXIT_GENERIC_ERROR);
     }
+
+  if (opt.http_impersonate)
+    {
+#ifdef HAVE_LIBZ
+      if (opt.compression != compression_none)
+        {
+          fprintf (stderr, _("\
+--compression cannot be used with --http-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+#endif
+
+      if (!opt.http_keep_alive)
+        {
+          fprintf (stderr, _("\
+--no-http-keep-alive cannot be used with --http-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+    }
+#ifdef HAVE_LIBNSS
+  if ((opt.cert_file || opt.private_key)
+      && opt.secure_protocol != secure_protocol_tlsv1_2)
+    {
+      fprintf (stderr, _("\
+--certificate and --private-key currently require --secure-protocol=tlsv1_2 with NSS.\n"));
+      print_usage (1);
+      exit (WGET_EXIT_GENERIC_ERROR);
+    }
+
+  if (opt.tls_impersonate)
+    {
+      if (opt.secure_protocol != secure_protocol_auto)
+        {
+          fprintf (stderr, _("\
+--secure-protocol cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+      if (opt.tls_ciphers_string)
+        {
+          fprintf (stderr, _("\
+--ciphers cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+      if (opt.cert_file)
+        {
+          fprintf (stderr, _("\
+--certificate cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+      if (opt.cert_type_specified)
+        {
+          fprintf (stderr, _("\
+--certificate-type cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+      if (opt.private_key)
+        {
+          fprintf (stderr, _("\
+--private-key cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+
+      if (opt.private_key_type_specified)
+        {
+          fprintf (stderr, _("\
+--private-key-type cannot be used with --tls-impersonate.\n"));
+          print_usage (1);
+          exit (WGET_EXIT_GENERIC_ERROR);
+        }
+    }
+#endif
 
   if (opt.rotate_dns && !opt.dns_cache)
     {

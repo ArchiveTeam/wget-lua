@@ -32,6 +32,7 @@ as that of the covered work.  */
 #define RETR_H
 
 #include "url.h"
+#include "http.h"
 
 extern int numurls;
 
@@ -50,11 +51,15 @@ enum {
   /* Used by HTTP/HTTPS*/
   rb_chunked_transfer_encoding = 4,
 
-  rb_compressed_gzip = 8
+  rb_compressed_gzip = 8,
+  rb_compressed_brotli = 16,
+  rb_compressed_zstd = 32,
+  rb_compressed_deflate = 64,
+  rb_compressed_compress = 128
 };
 
 int fd_read_body (const char *, int, FILE *, wgint, wgint, wgint *, wgint *,
-                  double *, int, FILE *, char *);
+                  double *, int, FILE *, char *, char *, encoding_t);
 
 typedef const char *(*hunk_terminator_t) (const char *, const char *, int);
 

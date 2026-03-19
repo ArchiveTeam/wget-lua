@@ -40,7 +40,8 @@ typedef enum
   ENC_GZIP,                     /* gzip compression */
   ENC_DEFLATE,                  /* deflate compression */
   ENC_COMPRESS,                 /* compress compression */
-  ENC_BROTLI                    /* brotli compression */
+  ENC_BROTLI,                   /* brotli compression */
+  ENC_ZSTD                      /* zstd compression */
 } encoding_t;
 
 struct url;
@@ -88,6 +89,9 @@ struct http_stat
 
   encoding_t local_encoding;    /* the encoding of the local file */
   encoding_t remote_encoding;   /* the encoding of the remote file */
+  encoding_t warc_payload_decoding; /* encoding to decode for the WARC
+                                       decoded payload digest, or
+                                       ENC_INVALID if unavailable */
 
   bool temporary;               /* downloading a temporary file */
 };

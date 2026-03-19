@@ -104,7 +104,10 @@ AC_ARG_WITH([libpsl],
 
 dnl SSL: Configure SSL backend to use
 AC_ARG_WITH([ssl],
-  [AS_HELP_STRING([--with-ssl={gnutls,openssl,no}], [specify SSL backend. GNU TLS is the default.])])
+  [AS_HELP_STRING([--with-ssl={gnutls,nss,openssl,no}], [specify SSL backend. GNU TLS is the default.])])
+
+AC_ARG_WITH([libnss-prefix],
+  [AS_HELP_STRING([--with-libnss-prefix=DIR], [specify directory of NSS installation.])])
 
 dnl Zlib: Configure use of zlib for compression
 AC_ARG_WITH([zlib],
@@ -113,6 +116,14 @@ AC_ARG_WITH([zlib],
 dnl ZSTD: Configure use of zstd for compression
 AC_ARG_WITH([zstandard],
   [AS_HELP_STRING([--without-zstandard], [disable zstandard.])])
+
+dnl Brotli: Configure use of brotli for compression
+AC_ARG_WITH([brotli],
+  [AS_HELP_STRING([--without-brotli], [disable brotli.])])
+
+dnl Compress: Configure use of ncompress for compression
+AC_ARG_WITH([compress],
+  [AS_HELP_STRING([--without-compress], [disable compress.])])
 
 dnl Metalink: Configure use of the Metalink library
 AC_ARG_WITH([metalink],
@@ -557,6 +568,29 @@ AS_IF([test x"$with_zstandard" != xno], [
   ])
 ])
 
+AS_IF([test x"$with_brotli" != xno], [
+  with_brotli=yes
+  PKG_CHECK_MODULES([BROTLI], libbrotlidec, [
+    LIBS="$BROTLI_LIBS $LIBS"
+    CFLAGS="$BROTLI_CFLAGS $CFLAGS"
+    AC_DEFINE([HAVE_BROTLI], [1], [Define if using brotli.])
+  ], [
+    AC_MSG_ERROR([brotli not found])
+  ])
+])
+
+AS_IF([test x"$with_compress" != xno], [
+  AC_CHECK_LIB([ncompress], [ncompress_uncompress_fd], [
+    with_compress=yes
+    LIBS="-lncompress $LIBS"
+    AC_DEFINE([HAVE_NCOMPRESS], [1], [Define if using ncompress.])
+  ], [
+    with_compress=no
+  ])
+], [
+  with_compress=no
+])
+
 AS_IF([test x"$with_ssl" = xopenssl], [
   if [test x"$with_libssl_prefix" = x]; then
     PKG_CHECK_MODULES([OPENSSL], [openssl], [
@@ -628,6 +662,57 @@ AS_IF([test x"$with_ssl" = xopenssl], [
       fi
     ])
   fi
+], [AS_IF([test x"$with_ssl" = xnss], [
+  ssl_found=no
+  if [test x"$with_libnss_prefix" = x]; then
+    PKG_CHECK_MODULES([NSS], [nss], [
+      AC_MSG_NOTICE([compiling in support for SSL via NSS])
+      ssl_library="nss"
+      LIBS="$NSS_LIBS $LIBS"
+      CFLAGS="$NSS_CFLAGS -DHAVE_LIBNSS $CFLAGS"
+      AC_DEFINE([HAVE_LIBNSS], [1], [Define if using NSS.])
+      ssl_found=yes
+    ])
+  fi
+
+  if [test x"$ssl_found" != xyes]; then
+    nss_save_CFLAGS="$CFLAGS"
+    nss_save_LIBS="$LIBS"
+
+    if [test x"$with_libnss_prefix" = x]; then
+      NSS_CFLAGS=""
+      NSS_LIBS="-lnss3 -lssl3 -lnssutil3 -lsmime3 -lplds4 -lplc4 -lnspr4"
+    else
+      NSS_CFLAGS="-I$with_libnss_prefix/include/nss -I$with_libnss_prefix/include/nspr"
+      NSS_LIBS="-L$with_libnss_prefix/lib -lnss3 -lssl3 -lnssutil3 -lsmime3 -lplds4 -lplc4 -lnspr4"
+    fi
+
+    CFLAGS="$NSS_CFLAGS $CFLAGS"
+    LIBS="$NSS_LIBS $LIBS"
+
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+#include <nss.h>
+#include <ssl.h>
+      ]], [[
+        NSS_NoDB_Init ("");
+        SSL_ImportFD (NULL, NULL);
+      ]])], [
+      AC_MSG_NOTICE([compiling in support for SSL via NSS])
+      ssl_library="nss"
+      AC_DEFINE([HAVE_LIBNSS], [1], [Define if using NSS.])
+      ssl_found=yes
+    ], [
+      AC_MSG_ERROR([--with-ssl=nss was given, but NSS is not available.])
+    ])
+
+    CFLAGS="$nss_save_CFLAGS"
+    LIBS="$nss_save_LIBS"
+    if [test x"$ssl_found" = xyes]; then
+      LIBS="$NSS_LIBS $LIBS"
+      CFLAGS="$NSS_CFLAGS -DHAVE_LIBNSS $CFLAGS"
+    fi
+  fi
+
 ], [
   # --with-ssl is not openssl: check if it's no
   AS_IF([test x"$with_ssl" != xno], [
@@ -662,7 +747,7 @@ AS_IF([test x"$with_ssl" = xopenssl], [
 
     AC_CHECK_FUNCS(gnutls_priority_set_direct)
   ]) # endif: --with-ssl != no?
-]) # endif: --with-ssl == openssl?
+])]) # endif: --with-ssl == openssl?
 
 dnl Enable NTLM if requested and if SSL is available.
 if test x"$LIBSSL" != x || test "$ac_cv_lib_ssl32_SSL_connect" = yes
@@ -1089,6 +1174,7 @@ AM_CONDITIONAL([WITH_NTLM], [test "X$ENABLE_NTLM" = "Xyes"])
 AM_CONDITIONAL([WITH_OPIE], [test x"$ENABLE_OPIE" = x"yes"])
 AM_CONDITIONAL([WITH_OPENSSL], [test x"$ssl_library" = x"openssl"])
 AM_CONDITIONAL([WITH_GNUTLS], [test x"$ssl_library" = x"gnutls"])
+AM_CONDITIONAL([WITH_NSS], [test x"$ssl_library" = x"nss"])
 
 dnl
 dnl Create output
@@ -1112,6 +1198,8 @@ AC_MSG_NOTICE([Summary of build options:
   SSL:               $with_ssl
   Zlib:              $with_zlib
   Zstandard:         $with_zstandard
+  Brotli:            $with_brotli
+  Compress:          $with_compress
   Lua:               $LUA_INFO
   PSL:               $with_libpsl
   PCRE:              $PCRE_INFO

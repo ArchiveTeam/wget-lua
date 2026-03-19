@@ -1580,7 +1580,7 @@ Error in server response, closing control connection.\n"));
   res = fd_read_body (con->target, dtsock, fp,
                       expected_bytes ? expected_bytes - restval : 0,
                       restval, &rd_size, qtyread, &con->dltime, flags, warc_tmp,
-                      NULL);
+                      NULL, NULL, ENC_INVALID);
 
   tms = datetime_str (time (NULL));
   tmrate = retr_rate (rd_size, con->dltime);

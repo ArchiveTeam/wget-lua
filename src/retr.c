@@ -36,6 +36,7 @@ as that of the covered work.  */
 #include <errno.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/wait.h>
 #include <sha1.h>
 #ifdef VMS
 # include <unixio.h>            /* For delete(). */
@@ -43,6 +44,15 @@ as that of the covered work.  */
 
 #ifdef HAVE_LIBZ
 # include <zlib.h>
+#endif
+#ifdef HAVE_BROTLI
+# include <brotli/decode.h>
+#endif
+#ifdef HAVE_ZSTD
+# include <zstd.h>
+#endif
+#ifdef HAVE_NCOMPRESS
+extern void ncompress_uncompress_fd(int, int);
 #endif
 
 #include "exits.h"
@@ -160,7 +170,9 @@ limit_bandwidth (wgint bytes, struct ptimer *timer)
 
 /* Write data in BUF to OUT.  However, if *SKIP is non-zero, skip that
    amount of data and decrease SKIP.  Increment *TOTAL by the amount
-   of data written.  If OUT2 is not NULL, also write BUF to OUT2.
+   of data written.  If OUT2 is not NULL, also write BUF to OUT2.  If
+   CTX is not NULL, hash the bytes regardless of whether OUT/OUT2 are
+   present.
    In case of error writing to OUT, -2 is returned.  In case of error
    writing to OUT2, -3 is returned.  Return 1 if the whole BUF was
    skipped.  */
@@ -169,9 +181,6 @@ static int
 write_data (FILE *out, FILE *out2, const char *buf, int bufsize,
             wgint *skip, wgint *written, struct sha1_ctx *ctx)
 {
-  if (out == NULL && out2 == NULL)
-    return 1;
-
   if (skip)
     {
       if (*skip > bufsize)
@@ -257,7 +266,9 @@ int
 fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, wgint startpos,
 
               wgint *qtyread, wgint *qtywritten, double *elapsed, int flags,
-              FILE *out2, char *sha1)
+              FILE *out2, char *sha1_no_transfer_encoding,
+              char *sha1_no_content_encoding,
+              encoding_t warc_payload_decoding)
 {
   int ret = 0;
 #undef max
@@ -280,6 +291,9 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
 
   bool exact = !!(flags & rb_read_exactly);
 
+  if (out2 == NULL)
+    warc_payload_decoding = ENC_INVALID;
+
   /* Used only by HTTP/HTTPS chunked transfer encoding.  */
   bool chunked = flags & rb_chunked_transfer_encoding;
   wgint skip = 0;
@@ -289,41 +303,140 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
   wgint sum_written = 0;
   wgint remaining_chunk_size = 0;
 
-  struct sha1_ctx ctx_payload;
-  sha1_init_ctx (&ctx_payload);
+  struct sha1_ctx ctx_payload_no_transfer_encoding;
+  struct sha1_ctx ctx_payload_no_content_encoding;
+  sha1_init_ctx (&ctx_payload_no_transfer_encoding);
+  sha1_init_ctx (&ctx_payload_no_content_encoding);
+  bool encoded_decode_output = false;
+  bool have_encoded_write = false;
 
 #ifdef HAVE_LIBZ
+  bool gzip_decode_output = flags & rb_compressed_gzip;
+  bool gzip_decode_digest = gzip_decode_output || warc_payload_decoding == ENC_GZIP;
+  bool deflate_decode_output = flags & rb_compressed_deflate;
+  bool deflate_decode_digest = deflate_decode_output
+                               || warc_payload_decoding == ENC_DEFLATE;
   /* try to minimize the number of calls to inflate() and write_data() per
      call to fd_read() */
   unsigned int gzbufsize = dlbufsize * 4;
   char *gzbuf = NULL;
   z_stream gzstream;
+  char *defbuf = NULL;
+  z_stream defstream;
+  bool deflate_raw = false;
+  bool deflate_finished = false;
 
-  if (flags & rb_compressed_gzip)
+  if (gzip_decode_digest)
     {
+      encoded_decode_output = gzip_decode_output;
+      have_encoded_write = true;
       gzbuf = xmalloc (gzbufsize);
-      if (gzbuf != NULL)
-        {
-          gzstream.zalloc = zalloc;
-          gzstream.zfree = zfree;
-          gzstream.opaque = Z_NULL;
-          gzstream.next_in = Z_NULL;
-          gzstream.avail_in = 0;
+      gzstream.zalloc = zalloc;
+      gzstream.zfree = zfree;
+      gzstream.opaque = Z_NULL;
+      gzstream.next_in = Z_NULL;
+      gzstream.avail_in = 0;
 
-          #define GZIP_DETECT 32 /* gzip format detection */
-          #define GZIP_WINDOW 15 /* logarithmic window size (default: 15) */
-          ret = inflateInit2 (&gzstream, GZIP_DETECT | GZIP_WINDOW);
-          if (ret != Z_OK)
-            {
-              xfree (gzbuf);
-              errno = (ret == Z_MEM_ERROR) ? ENOMEM : EINVAL;
-              ret = -1;
-              goto out;
-            }
-        }
-      else
+      #define GZIP_DETECT 32 /* gzip format detection */
+      #define GZIP_WINDOW 15 /* logarithmic window size (default: 15) */
+      ret = inflateInit2 (&gzstream, GZIP_DETECT | GZIP_WINDOW);
+      if (ret != Z_OK)
         {
+          xfree (gzbuf);
+          errno = (ret == Z_MEM_ERROR) ? ENOMEM : EINVAL;
+          ret = -1;
+          goto out;
+        }
+    }
+  else if (deflate_decode_digest)
+    {
+      encoded_decode_output = deflate_decode_output;
+      have_encoded_write = true;
+      defbuf = xmalloc (gzbufsize);
+      defstream.zalloc = zalloc;
+      defstream.zfree = zfree;
+      defstream.opaque = Z_NULL;
+      defstream.next_in = Z_NULL;
+      defstream.avail_in = 0;
+
+      ret = inflateInit (&defstream);
+      if (ret != Z_OK)
+        {
+          xfree (defbuf);
+          errno = (ret == Z_MEM_ERROR) ? ENOMEM : EINVAL;
+          ret = -1;
+          goto out;
+        }
+    }
+#endif
+
+#ifdef HAVE_BROTLI
+  bool brotli_decode_output = flags & rb_compressed_brotli;
+  bool brotli_decode_digest = brotli_decode_output
+                              || warc_payload_decoding == ENC_BROTLI;
+  unsigned int brbufsize = dlbufsize * 4;
+  char *brbuf = NULL;
+  BrotliDecoderState *brstate = NULL;
+
+  if (brotli_decode_digest)
+    {
+      encoded_decode_output = brotli_decode_output;
+      have_encoded_write = true;
+      brbuf = xmalloc (brbufsize);
+      brstate = BrotliDecoderCreateInstance (NULL, NULL, NULL);
+      if (brstate == NULL)
+        {
+          xfree (brbuf);
           errno = ENOMEM;
+          ret = -1;
+          goto out;
+        }
+    }
+#endif
+
+#ifdef HAVE_ZSTD
+  bool zstd_decode_output = flags & rb_compressed_zstd;
+  bool zstd_decode_digest = zstd_decode_output || warc_payload_decoding == ENC_ZSTD;
+  unsigned int zstdbufsize = dlbufsize * 4;
+  char *zstdbuf = NULL;
+  ZSTD_DCtx *zstdstream = NULL;
+  bool zstd_finished = false;
+
+  if (zstd_decode_digest)
+    {
+      encoded_decode_output = zstd_decode_output;
+      have_encoded_write = true;
+      zstdbuf = xmalloc (zstdbufsize);
+      zstdstream = ZSTD_createDCtx ();
+      if (zstdstream == NULL)
+        {
+          xfree (zstdbuf);
+          errno = ENOMEM;
+          ret = -1;
+          goto out;
+        }
+    }
+#endif
+
+#ifdef HAVE_NCOMPRESS
+  bool compress_decode_output = flags & rb_compressed_compress;
+  bool compress_decode_digest = compress_decode_output
+                                || warc_payload_decoding == ENC_COMPRESS;
+  FILE *compress_raw = NULL;
+  FILE *compress_decoded = NULL;
+
+  if (compress_decode_digest)
+    {
+      encoded_decode_output = compress_decode_output;
+      have_encoded_write = true;
+      compress_raw = tmpfile ();
+      compress_decoded = tmpfile ();
+      if (compress_raw == NULL || compress_decoded == NULL)
+        {
+          if (compress_raw != NULL)
+            fclose (compress_raw);
+          if (compress_decoded != NULL)
+            fclose (compress_decoded);
           ret = -1;
           goto out;
         }
@@ -466,20 +579,26 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
 
           sum_read += ret;
 
-#ifdef HAVE_LIBZ
-          if (gzbuf != NULL)
+          if (have_encoded_write)
             {
-              int err;
-              int towrite;
-
-              /* Write original data to WARC file */
-              write_res = write_data (NULL, out2, dlbuf, ret, NULL, NULL,
-                                      &ctx_payload);
+              write_res = write_data (encoded_decode_output ? NULL : out,
+                                      out2, dlbuf, ret,
+                                      encoded_decode_output ? NULL : &skip,
+                                      encoded_decode_output ? NULL : &sum_written,
+                                      out2 != NULL
+                                      ? &ctx_payload_no_transfer_encoding : NULL);
               if (write_res < 0)
                 {
                   ret = write_res;
                   goto out;
                 }
+            }
+
+#ifdef HAVE_LIBZ
+          if (gzbuf != NULL)
+            {
+              int err;
+              int towrite;
 
               gzstream.avail_in = ret;
               gzstream.next_in = (unsigned char *) dlbuf;
@@ -511,8 +630,11 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
                     }
 
                   towrite = gzbufsize - gzstream.avail_out;
-                  write_res = write_data (out, NULL, gzbuf, towrite, &skip,
-                                          &sum_written, NULL);
+                  write_res = write_data (gzip_decode_output ? out : NULL, NULL,
+                                          gzbuf, towrite,
+                                          gzip_decode_output ? &skip : NULL,
+                                          gzip_decode_output ? &sum_written : NULL,
+                                          &ctx_payload_no_content_encoding);
                   if (write_res < 0)
                     {
                       ret = write_res;
@@ -521,11 +643,186 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
                 }
               while (gzstream.avail_out == 0);
             }
+          else if (defbuf != NULL)
+            {
+              int err;
+
+              defstream.avail_in = ret;
+              defstream.next_in = (unsigned char *) dlbuf;
+
+              do
+                {
+                  int towrite;
+
+                  defstream.avail_out = gzbufsize;
+                  defstream.next_out = (unsigned char *) defbuf;
+
+                  err = inflate (&defstream, Z_NO_FLUSH);
+                  if (!deflate_raw
+                      && defstream.total_out == 0
+                      && err == Z_DATA_ERROR)
+                    {
+                      if (inflateEnd (&defstream) != Z_OK
+                          || inflateInit2 (&defstream, -MAX_WBITS) != Z_OK)
+                        {
+                          errno = EINVAL;
+                          ret = -1;
+                          goto out;
+                        }
+
+                      deflate_raw = true;
+                      defstream.avail_in = ret;
+                      defstream.next_in = (unsigned char *) dlbuf;
+                      defstream.avail_out = gzbufsize;
+                      defstream.next_out = (unsigned char *) defbuf;
+                      err = inflate (&defstream, Z_NO_FLUSH);
+                    }
+
+                  switch (err)
+                    {
+                    case Z_MEM_ERROR:
+                      errno = ENOMEM;
+                      ret = -1;
+                      goto out;
+                    case Z_NEED_DICT:
+                    case Z_DATA_ERROR:
+                      errno = EINVAL;
+                      ret = -1;
+                      goto out;
+                    case Z_STREAM_END:
+                      deflate_finished = true;
+                      if (exact && sum_read != toread)
+                        {
+                          DEBUGP (("deflate stream ended unexpectedly after %"PRId64"/%"PRId64
+                                   " bytes\n", sum_read, toread));
+                        }
+                    }
+
+                  towrite = gzbufsize - defstream.avail_out;
+                  write_res = write_data (deflate_decode_output ? out : NULL,
+                                          NULL, defbuf, towrite,
+                                          deflate_decode_output ? &skip : NULL,
+                                          deflate_decode_output ? &sum_written : NULL,
+                                          &ctx_payload_no_content_encoding);
+                  if (write_res < 0)
+                    {
+                      ret = write_res;
+                      goto out;
+                    }
+                }
+              while (defstream.avail_out == 0);
+            }
+          else
+#endif
+#ifdef HAVE_BROTLI
+          if (brbuf != NULL)
+            {
+              BrotliDecoderResult result;
+              size_t avail_in;
+              const uint8_t *next_in;
+
+              avail_in = ret;
+              next_in = (const uint8_t *) dlbuf;
+
+              do
+                {
+                  size_t avail_out = brbufsize;
+                  uint8_t *next_out = (uint8_t *) brbuf;
+                  size_t total_out = 0;
+                  int towrite;
+
+                  result = BrotliDecoderDecompressStream (brstate, &avail_in,
+                                                          &next_in, &avail_out,
+                                                          &next_out,
+                                                          &total_out);
+                  if (result == BROTLI_DECODER_RESULT_ERROR)
+                    {
+                      errno = EINVAL;
+                      ret = -1;
+                      goto out;
+                    }
+
+                  towrite = brbufsize - avail_out;
+                  write_res = write_data (brotli_decode_output ? out : NULL,
+                                          NULL, brbuf, towrite,
+                                          brotli_decode_output ? &skip : NULL,
+                                          brotli_decode_output ? &sum_written : NULL,
+                                          &ctx_payload_no_content_encoding);
+                  if (write_res < 0)
+                    {
+                      ret = write_res;
+                      goto out;
+                    }
+                }
+              while (avail_in != 0
+                     || result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
+            }
+          else
+#endif
+#ifdef HAVE_ZSTD
+          if (zstdbuf != NULL)
+            {
+              ZSTD_inBuffer input;
+
+              input.src = dlbuf;
+              input.size = ret;
+              input.pos = 0;
+
+              while (input.pos < input.size)
+                {
+                  ZSTD_outBuffer output;
+                  size_t result;
+
+                  output.dst = zstdbuf;
+                  output.size = zstdbufsize;
+                  output.pos = 0;
+
+                  result = ZSTD_decompressStream (zstdstream, &output, &input);
+                  if (ZSTD_isError (result))
+                    {
+                      errno = EINVAL;
+                      ret = -1;
+                      goto out;
+                    }
+
+                  if (result == 0)
+                    zstd_finished = true;
+
+                  write_res = write_data (zstd_decode_output ? out : NULL, NULL,
+                                          zstdbuf, output.pos,
+                                          zstd_decode_output ? &skip : NULL,
+                                          zstd_decode_output ? &sum_written : NULL,
+                                          &ctx_payload_no_content_encoding);
+                  if (write_res < 0)
+                    {
+                      ret = write_res;
+                      goto out;
+                    }
+                }
+            }
+          else
+#endif
+#ifdef HAVE_NCOMPRESS
+          if (compress_raw != NULL)
+            {
+              /* Unlike the other decompression methods, for compress, a
+                 function from `ncompress` is used, which takes a file as
+                 input. So, a temporary file is written. */
+              if (fwrite (dlbuf, 1, ret, compress_raw) != (size_t) ret)
+                {
+                  ret = -1;
+                  goto out;
+                }
+            }
           else
 #endif
             {
               write_res = write_data (out, out2, dlbuf, ret, &skip,
-                                      &sum_written, &ctx_payload);
+                                      &sum_written,
+                                      &ctx_payload_no_content_encoding);
+              if (write_res >= 0)
+                write_data (NULL, NULL, dlbuf, ret, NULL, NULL,
+                            out2 != NULL ? &ctx_payload_no_transfer_encoding : NULL);
               if (write_res < 0)
                 {
                   ret = write_res;
@@ -565,6 +862,63 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
                          (startpos + sum_read) / (startpos + toread));
 #endif
     }
+#ifdef HAVE_NCOMPRESS
+  if (ret >= 0 && compress_raw != NULL)
+    {
+      /* The previously written temporary file for `ncompress` is processed
+         here. A decompressed temporary output file if written, and read
+         again. */
+      char buf[8192];
+      pid_t pid;
+      int status;
+      size_t nread;
+
+      if (fflush (compress_raw) != 0
+          || fseek (compress_raw, 0, SEEK_SET) != 0
+          || (pid = fork ()) < 0)
+        {
+          ret = -1;
+          goto out;
+        }
+
+      if (pid == 0)
+        {
+          ncompress_uncompress_fd (fileno (compress_raw),
+                                   fileno (compress_decoded));
+          _exit (fflush (compress_decoded) != 0);
+        }
+      while (waitpid (pid, &status, 0) < 0)
+        if (errno != EINTR)
+          {
+            ret = -1;
+            goto out;
+          }
+
+      if (status != 0
+          || (clearerr (compress_decoded),
+              fseek (compress_decoded, 0, SEEK_SET) != 0))
+        {
+          ret = -1;
+          goto out;
+        }
+
+      while ((nread = fread (buf, 1, sizeof (buf), compress_decoded)) > 0)
+        if ((ret = write_data (compress_decode_output ? out : NULL, NULL,
+                               buf, nread,
+                               compress_decode_output ? &skip : NULL,
+                               compress_decode_output ? &sum_written : NULL,
+                               &ctx_payload_no_content_encoding)) < 0)
+          goto out;
+
+      if (ferror (compress_decoded))
+        {
+          ret = -1;
+          goto out;
+        }
+
+      ret = 0;
+    }
+#endif
   if (ret < -1)
     ret = -1;
 
@@ -602,10 +956,118 @@ fd_read_body (const char *downloaded_filename, int fd, FILE *out, wgint toread, 
                   gzstream.total_in, sum_read));
         }
     }
+  else if (defbuf != NULL)
+    {
+      int err = inflateEnd (&defstream);
+      if (ret >= 0)
+        {
+          if (err == Z_OK && deflate_finished)
+            ret = 0;
+          else
+            {
+              errno = EINVAL;
+              ret = -1;
+            }
+        }
+      xfree (defbuf);
+
+      if (defstream.total_in != (uLong) sum_read)
+        {
+          DEBUGP (("deflate read size differs from raw read size (%lu/%"PRId64")\n",
+                   defstream.total_in, sum_read));
+        }
+    }
 #endif
 
-  if (sha1 != NULL)
-    sha1_finish_ctx (&ctx_payload, sha1);
+#ifdef HAVE_BROTLI
+    if (brbuf != NULL)
+      {
+        if (brstate != NULL)
+          {
+            if (ret >= 0 && !BrotliDecoderIsFinished (brstate))
+              {
+                BrotliDecoderResult result;
+
+                do
+                  {
+                    size_t avail_in = 0;
+                    const uint8_t *next_in = NULL;
+                    size_t avail_out = brbufsize;
+                    uint8_t *next_out = (uint8_t *) brbuf;
+                    size_t total_out = 0;
+                    int write_res;
+                    int towrite;
+
+                    result = BrotliDecoderDecompressStream (brstate, &avail_in,
+                                                            &next_in, &avail_out,
+                                                            &next_out,
+                                                            &total_out);
+                    if (result == BROTLI_DECODER_RESULT_ERROR)
+                      {
+                        errno = EINVAL;
+                        ret = -1;
+                        break;
+                      }
+
+                    towrite = brbufsize - avail_out;
+                    write_res = write_data (brotli_decode_output ? out : NULL,
+                                            NULL, brbuf, towrite,
+                                            brotli_decode_output ? &skip : NULL,
+                                            brotli_decode_output ? &sum_written : NULL,
+                                            &ctx_payload_no_content_encoding);
+                    if (write_res < 0)
+                      {
+                        ret = write_res;
+                        break;
+                      }
+                  }
+                while (!BrotliDecoderIsFinished (brstate)
+                       && result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
+
+                if (ret >= 0 && !BrotliDecoderIsFinished (brstate))
+                  {
+                    errno = EINVAL;
+                    ret = -1;
+                  }
+              }
+            else if (ret >= 0)
+              ret = 0;
+            BrotliDecoderDestroyInstance (brstate);
+          }
+        xfree (brbuf);
+      }
+#endif
+
+#ifdef HAVE_ZSTD
+  if (zstdbuf != NULL)
+    {
+      if (ret >= 0 && !zstd_finished)
+        {
+          errno = EINVAL;
+          ret = -1;
+        }
+      else if (ret >= 0)
+        ret = 0;
+
+      if (zstdstream != NULL)
+        ZSTD_freeDCtx (zstdstream);
+      xfree (zstdbuf);
+    }
+#endif
+
+#ifdef HAVE_NCOMPRESS
+  if (compress_raw != NULL)
+    fclose (compress_raw);
+  if (compress_decoded != NULL)
+    fclose (compress_decoded);
+#endif
+
+  if (sha1_no_transfer_encoding != NULL)
+    sha1_finish_ctx (&ctx_payload_no_transfer_encoding,
+                     sha1_no_transfer_encoding);
+  if (sha1_no_content_encoding != NULL)
+    sha1_finish_ctx (&ctx_payload_no_content_encoding,
+                     sha1_no_content_encoding);
 
   if (qtyread)
     *qtyread += sum_read;

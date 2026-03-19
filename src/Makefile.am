@@ -82,6 +82,10 @@ if WITH_GNUTLS
 wget_SOURCES += gnutls.c
 endif
 
+if WITH_NSS
+wget_SOURCES += nss.c
+endif
+
 nodist_wget_SOURCES = version.c
 EXTRA_wget_SOURCES = iri.c metalink.c xattr.c
 LDADD = $(CODE_COVERAGE_LIBS) $(LIBOBJS) ../lib/libgnu.a $(GETADDRINFO_LIB) $(HOSTENT_LIB)\

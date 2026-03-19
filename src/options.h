@@ -214,6 +214,7 @@ struct options
 
   char *useragent;              /* User-Agent string, which can be set
                                    to something other than Wget. */
+  char *http_impersonate;       /* HTTP header profile to impersonate. */
   char *referer;                /* Naughty Referer, which can be
                                    set to something other than
                                    NULL. */
@@ -263,6 +264,8 @@ struct options
   } cert_type;                  /* type of client certificate file */
   enum keyfile_type
     private_key_type;           /* type of private key file */
+  bool cert_type_specified;
+  bool private_key_type_specified;
 
   char *ca_directory;           /* CA directory (hash files) */
   char *ca_cert;                /* CA certificate file to use */
@@ -282,6 +285,7 @@ struct options
   bool ftps_clear_data_connection;
 
   char *tls_ciphers_string;
+  char *tls_impersonate;
 #endif /* HAVE_SSL */
 
   bool cookies;                 /* whether cookies are used. */
@@ -360,6 +364,16 @@ struct options
   enum compression_options {
     compression_auto,
     compression_gzip,
+    compression_deflate,
+#ifdef HAVE_NCOMPRESS
+    compression_compress,
+#endif
+#ifdef HAVE_BROTLI
+    compression_brotli,
+#endif
+#ifdef HAVE_ZSTD
+    compression_zstd,
+#endif
     compression_none
   } compression;                /* type of HTTP compression to use */
 #endif

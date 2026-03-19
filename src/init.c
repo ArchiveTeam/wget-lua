@@ -101,6 +101,11 @@ CMD_DECLARE (cmd_use_askpass);
 #ifdef HAVE_LIBZ
 CMD_DECLARE (cmd_spec_compression);
 #endif
+CMD_DECLARE (cmd_spec_http_impersonate);
+#ifdef HAVE_LIBNSS
+CMD_DECLARE (cmd_spec_impersonate);
+CMD_DECLARE (cmd_spec_tls_impersonate);
+#endif
 CMD_DECLARE (cmd_spec_dirstruct);
 CMD_DECLARE (cmd_spec_header);
 CMD_DECLARE (cmd_spec_warc_header);
@@ -212,7 +217,9 @@ static const struct {
   { "ftpscleardataconnection", &opt.ftps_clear_data_connection, cmd_boolean },
   { "ftpsfallbacktoftp", &opt.ftps_fallback_to_ftp, cmd_boolean },
   { "ftpsimplicit",     &opt.ftps_implicit,     cmd_boolean },
+# if !defined(HAVE_LIBNSS)
   { "ftpsresumessl",    &opt.ftps_resume_ssl,   cmd_boolean },
+# endif
 #endif
 #ifdef __VMS
   { "ftpstmlf",         &opt.ftp_stmlf,         cmd_boolean },
@@ -230,6 +237,7 @@ static const struct {
 #endif
   { "htmlextension",    &opt.adjust_extension,  cmd_boolean }, /* deprecated */
   { "htmlify",          NULL,                   cmd_spec_htmlify },
+  { "httpimpersonate",  &opt.http_impersonate,  cmd_spec_http_impersonate },
   { "httpkeepalive",    &opt.http_keep_alive,   cmd_boolean },
   { "httppasswd",       &opt.http_passwd,       cmd_string }, /* deprecated */
   { "httppassword",     &opt.http_passwd,       cmd_string },
@@ -243,6 +251,9 @@ static const struct {
   { "ignorecase",       &opt.ignore_case,       cmd_boolean },
   { "ignorelength",     &opt.ignore_length,     cmd_boolean },
   { "ignoretags",       &opt.ignore_tags,       cmd_vector },
+#ifdef HAVE_LIBNSS
+  { "impersonate",      NULL,                   cmd_spec_impersonate },
+#endif
   { "includedirectories", &opt.includes,        cmd_directory_vector },
 #ifdef ENABLE_IPV6
   { "inet4only",        &opt.ipv4_only,         cmd_boolean },
@@ -348,6 +359,11 @@ static const struct {
   { "strictcomments",   &opt.strict_comments,   cmd_boolean },
   { "timeout",          NULL,                   cmd_spec_timeout },
   { "timestamping",     &opt.timestamping,      cmd_boolean },
+#ifdef HAVE_SSL
+# ifdef HAVE_LIBNSS
+  { "tlsimpersonate",   &opt.tls_impersonate,   cmd_spec_tls_impersonate },
+# endif
+#endif
   { "tries",            &opt.ntry,              cmd_number_inf },
   { "truncateoutput",   &opt.truncate_output_document, cmd_boolean },
   { "trustservernames", &opt.trustservernames,  cmd_boolean },
@@ -484,7 +500,11 @@ defaults (void)
 
 #ifdef HAVE_SSL
   opt.check_cert = CHECK_CERT_ON;
+# if !defined(HAVE_LIBNSS)
   opt.ftps_resume_ssl = true;
+# else
+  opt.ftps_resume_ssl = false;
+# endif
   opt.ftps_fallback_to_ftp = false;
   opt.ftps_implicit = false;
   opt.ftps_clear_data_connection = false;
@@ -1533,6 +1553,10 @@ cmd_cert_type (const char *com, const char *val, void *place)
   int ok = decode_string (val, choices, countof (choices), place);
   if (!ok)
     fprintf (stderr, _("%s: %s: Invalid value %s.\n"), exec_name, com, quote (val));
+  else if (place == &opt.cert_type)
+    opt.cert_type_specified = true;
+  else if (place == &opt.private_key_type)
+    opt.private_key_type_specified = true;
   return ok;
 }
 #endif
@@ -1549,6 +1573,16 @@ cmd_spec_compression (const char *com, const char *val, void *place)
   static const struct decode_item choices[] = {
     { "auto", compression_auto },
     { "gzip", compression_gzip },
+    { "deflate", compression_deflate },
+#ifdef HAVE_NCOMPRESS
+    { "compress", compression_compress },
+#endif
+#ifdef HAVE_BROTLI
+    { "br", compression_brotli },
+#endif
+#ifdef HAVE_ZSTD
+    { "zstd", compression_zstd },
+#endif
     { "none", compression_none },
   };
   int ok = decode_string (val, choices, countof (choices), place);
@@ -1788,6 +1822,50 @@ cmd_spec_report_speed (const char *com, const char *val, void *place_ignored _GL
   return opt.report_bps;
 }
 
+static bool
+cmd_spec_impersonate_profile (const char *com, const char *val, void *place)
+{
+  char **pstring = (char **) place;
+
+  if (c_strcasecmp (val, "firefox-h1") != 0
+      && c_strcasecmp (val, "firefox148-h1") != 0)
+    {
+      fprintf (stderr, _("%s: %s: Invalid value %s.\n"),
+               exec_name, com, quote (val));
+      return false;
+    }
+
+  xfree (*pstring);
+  *pstring = xstrdup ("firefox148-h1");
+  return true;
+}
+
+static bool
+cmd_spec_http_impersonate (const char *com, const char *val, void *place)
+{
+  return cmd_spec_impersonate_profile (com, val, place);
+}
+
+#if defined HAVE_SSL && defined HAVE_LIBNSS
+static bool
+cmd_spec_tls_impersonate (const char *com, const char *val, void *place)
+{
+  return cmd_spec_impersonate_profile (com, val, place);
+}
+#endif
+
+#ifdef HAVE_LIBNSS
+static bool
+cmd_spec_impersonate (const char *com, const char *val, void *place_ignored _GL_UNUSED)
+{
+  if (!cmd_spec_http_impersonate (com, val, &opt.http_impersonate))
+    return false;
+  if (!cmd_spec_tls_impersonate (com, val, &opt.tls_impersonate))
+    return false;
+  return true;
+}
+#endif
+
 #ifdef HAVE_SSL
 static bool
 cmd_spec_secure_protocol (const char *com, const char *val, void *place)
@@ -2002,18 +2080,18 @@ cleanup (void)
      because then you can find the real leaks, i.e. the allocated
      memory which grows with the size of the program.  */
 
+  http_cleanup ();
+#ifdef HAVE_SSL
+  ssl_cleanup ();
+#endif
 #if defined DEBUG_MALLOC || defined TESTING
   convert_cleanup ();
   res_cleanup ();
-  http_cleanup ();
   cleanup_html_url ();
   spider_cleanup ();
   host_cleanup ();
   log_cleanup ();
   netrc_cleanup ();
-#ifdef HAVE_SSL
-  ssl_cleanup ();
-#endif
   connect_cleanup ();
 
   xfree (opt.choose_config);
@@ -2062,6 +2140,7 @@ cleanup (void)
   xfree (opt.proxy_user);
   xfree (opt.proxy_passwd);
   xfree (opt.useragent);
+  xfree (opt.http_impersonate);
   xfree (opt.referer);
   xfree (opt.http_user);
   xfree (opt.http_passwd);
@@ -2077,6 +2156,8 @@ cleanup (void)
   xfree (opt.pinnedpubkey);
   xfree (opt.random_file);
   xfree (opt.egd_file);
+  xfree (opt.tls_ciphers_string);
+  xfree (opt.tls_impersonate);
 # endif
   xfree (opt.bind_address);
   xfree (opt.cookies_input);

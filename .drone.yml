@@ -34,3 +34,19 @@ steps:
     - ${DRONE_BRANCH}-gnutls
     build_args:
     - TLSTYPE=gnutls
+- name: docker_nss
+  image: plugins/docker
+  settings:
+    registry: atdr-writer.meo.ws
+    username:
+      from_secret: atdr_user
+    password:
+      from_secret: atdr_pass
+    repo: atdr-writer.meo.ws/archiveteam/wget-lua
+    dockerfile: Dockerfile
+    purge: true
+    auto_tag: false
+    tags:
+    - ${DRONE_BRANCH}-nss
+    build_args:
+    - TLSTYPE=nss

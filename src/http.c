@@ -1744,6 +1744,7 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   bool write_to_warc = true;
   char *url = u->url;
   char sha1_no_transfer_encoding[SHA1_DIGEST_SIZE];
+  char sha1_no_content_encoding[SHA1_DIGEST_SIZE];
 
   if (opt.warc_filename != NULL)
     {
@@ -1794,6 +1795,22 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
 
   if (hs->remote_encoding == ENC_GZIP)
     flags |= rb_compressed_gzip;
+#ifdef HAVE_NCOMPRESS
+  else if (hs->remote_encoding == ENC_COMPRESS)
+    flags |= rb_compressed_compress;
+#endif
+#ifdef HAVE_BROTLI
+  else if (hs->remote_encoding == ENC_BROTLI)
+    flags |= rb_compressed_brotli;
+#endif
+#ifdef HAVE_ZSTD
+  else if (hs->remote_encoding == ENC_ZSTD)
+    flags |= rb_compressed_zstd;
+#endif
+#ifdef HAVE_LIBZ
+  else if (hs->remote_encoding == ENC_DEFLATE)
+    flags |= rb_compressed_deflate;
+#endif
 
   hs->len = hs->restval;
   hs->rd_size = 0;
@@ -1802,7 +1819,8 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
      response body to warc_tmp.  */
   hs->res = fd_read_body (hs->local_file, sock, fp, contlen != -1 ? contlen : 0,
                           hs->restval, &hs->rd_size, &hs->len, &hs->dltime,
-                          flags, warc_tmp, sha1_no_transfer_encoding);
+                          flags, warc_tmp, sha1_no_transfer_encoding,
+                          sha1_no_content_encoding, hs->warc_payload_decoding);
 
   write_to_warc = luahooks_write_to_warc (u, hs);
 
@@ -1820,6 +1838,8 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
                                                warc_tmp, warc_payload_offset,
                                                type, statcode, hs->newloc,
                                                sha1_no_transfer_encoding,
+                                               hs->warc_payload_decoding != ENC_INVALID
+                                               ? sha1_no_content_encoding : NULL,
                                                warc_protocol,
                                                warc_cipher_name);
           xfree (warc_url);
@@ -1869,6 +1889,85 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
   else if (*opt.useragent)                                               \
     request_set_header (req, "User-Agent", opt.useragent, rel_none);     \
 } while (0)
+
+/* Set Firefox HTTP headers, currently Firefox 148. The Sec-*, Priority,
+   and Upgrade-Insecure-Requests are currently only set on the top level URL
+   to be retrieved. */
+static void
+http_apply_firefox_h1_headers (struct request *req, struct http_stat *hs,
+                               bool head_only)
+{
+  static const struct
+  {
+    const char *name;
+    const char *value;
+    bool top_level_only;
+  } firefox_h1_headers[] = {
+    { "User-Agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
+      false },
+    { "Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      false },
+    { "Accept-Language", "en-US,en;q=0.9", false },
+    { "Accept-Encoding", "gzip, deflate, br, zstd", false },
+    { "Connection", "keep-alive", false },
+    { "Upgrade-Insecure-Requests", "1", true },
+    { "Sec-Fetch-Dest", "document", true },
+    { "Sec-Fetch-Mode", "navigate", true },
+    { "Sec-Fetch-Site", "none", true },
+    { "Sec-Fetch-User", "?1", true },
+    { "Priority", "u=0, i", true }
+  };
+  bool top_level = !hs->referer && !head_only;
+  int i;
+
+  for (i = 0; i < countof (firefox_h1_headers); i++)
+    if (!firefox_h1_headers[i].top_level_only || top_level)
+      request_set_header (req, firefox_h1_headers[i].name,
+                          firefox_h1_headers[i].value, rel_none);
+
+  if (opt.useragent && *opt.useragent)
+    request_set_header (req, "User-Agent", opt.useragent, rel_none);
+}
+
+#ifdef HAVE_LIBZ
+static const char *
+compression_to_accept_encoding (void)
+{
+  switch (opt.compression)
+    {
+    case compression_auto:
+      return "gzip, deflate"
+#ifdef HAVE_BROTLI
+             ", br"
+#endif
+#ifdef HAVE_ZSTD
+             ", zstd"
+#endif
+             ;
+    case compression_gzip:
+      return "gzip";
+    case compression_deflate:
+      return "deflate";
+#ifdef HAVE_NCOMPRESS
+    case compression_compress:
+      return "compress";
+#endif
+#ifdef HAVE_BROTLI
+    case compression_brotli:
+      return "br";
+#endif
+#ifdef HAVE_ZSTD
+    case compression_zstd:
+      return "zstd";
+#endif
+    case compression_none:
+      return "identity";
+    default:
+      return "identity";
+    }
+}
+#endif
 
 /*
    Convert time_t to one of valid HTTP date formats
@@ -2006,12 +2105,18 @@ initialize_request (const struct url *u, struct http_stat *hs, int *dt, struct u
                         rel_value);
   SET_USER_AGENT (req);
   request_set_header (req, "Accept", "*/*", rel_none);
-#ifdef HAVE_LIBZ
-  if (opt.compression != compression_none)
-    request_set_header (req, "Accept-Encoding", "gzip", rel_none);
+  if (opt.http_impersonate)
+    http_apply_firefox_h1_headers (req, hs, head_only);
   else
+    {
+#ifdef HAVE_LIBZ
+      if (opt.compression != compression_none)
+        request_set_header (req, "Accept-Encoding",
+                            compression_to_accept_encoding (), rel_none);
+      else
 #endif
-    request_set_header (req, "Accept-Encoding", "identity", rel_none);
+        request_set_header (req, "Accept-Encoding", "identity", rel_none);
+    }
 
   /* Find the username with priority */
   if (u->user)
@@ -2051,13 +2156,16 @@ initialize_request (const struct url *u, struct http_stat *hs, int *dt, struct u
       *basic_auth_finished = maybe_send_basic_creds (u->host, *user, *passwd, req);
     }
 
-  if (inhibit_keep_alive)
-    request_set_header (req, "Connection", "Close", rel_none);
-  else
+  if (!opt.http_impersonate)
     {
-      request_set_header (req, "Connection", "Keep-Alive", rel_none);
-      if (proxy)
-        request_set_header (req, "Proxy-Connection", "Keep-Alive", rel_none);
+      if (inhibit_keep_alive)
+        request_set_header (req, "Connection", "Close", rel_none);
+      else
+        {
+          request_set_header (req, "Connection", "Keep-Alive", rel_none);
+          if (proxy)
+            request_set_header (req, "Proxy-Connection", "Keep-Alive", rel_none);
+        }
     }
 
   if (opt.method)
@@ -3356,6 +3464,7 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
   xfree (hs->message);
   hs->local_encoding = ENC_NONE;
   hs->remote_encoding = ENC_NONE;
+  hs->warc_payload_decoding = ENC_NONE;
   xfree (hs->request_headers);
   hs->request_headers = NULL;
   xfree (hs->response_headers);
@@ -3673,6 +3782,10 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
           else if (0 == c_strcasecmp(hdrval, "x-gzip"))
             hs->local_encoding = ENC_GZIP;
           break;
+        case 'z': case 'Z':
+          if (0 == c_strcasecmp (hdrval, "zstd"))
+            hs->local_encoding = ENC_ZSTD;
+          break;
         case '\0':
           hs->local_encoding = ENC_NONE;
         }
@@ -3684,12 +3797,19 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
         }
 #ifdef HAVE_LIBZ
       else if (hs->local_encoding == ENC_GZIP
-               && opt.compression != compression_none)
+               && (opt.http_impersonate || opt.compression != compression_none))
         {
           const char *p;
 
+          /* In HTTP impersonation mode, decode Content-Encoding like
+             a browser would.  */
+          if (opt.http_impersonate)
+            {
+              hs->remote_encoding = ENC_GZIP;
+              hs->local_encoding = ENC_NONE;
+            }
           /* Make sure the Content-Type is not gzip before decompressing */
-          if (type)
+          else if (type)
             {
               p = strchr (type, '/');
               if (p == NULL)
@@ -3716,7 +3836,8 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
             }
 
           /* don't uncompress if a file ends with '.gz' or '.tgz' */
-          if (hs->remote_encoding == ENC_GZIP
+          if (!opt.http_impersonate
+              && hs->remote_encoding == ENC_GZIP
               && (p = strrchr(u->file, '.'))
               && (c_strcasecmp(p, ".gz") == 0 || c_strcasecmp(p, ".tgz") == 0))
             {
@@ -3725,6 +3846,88 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
             }
         }
 #endif
+#define SET_COMPRESSED_REMOTE_ENCODING(encoding, suffix, message) do { \
+  const char *compressed_suffix;                                       \
+  if (opt.http_impersonate                                             \
+      || opt.compression != compression_none)                          \
+    {                                                                  \
+      hs->remote_encoding = (encoding);                                \
+      hs->local_encoding = ENC_NONE;                                   \
+      if (!opt.http_impersonate                                        \
+          && (compressed_suffix = strrchr (u->file, '.'))              \
+          && c_strcasecmp (compressed_suffix, (suffix)) == 0)          \
+        {                                                              \
+          DEBUGP (((message)));                                        \
+          hs->remote_encoding = ENC_NONE;                              \
+        }                                                              \
+    }                                                                  \
+} while (0)
+#ifdef HAVE_NCOMPRESS
+      else if (hs->local_encoding == ENC_COMPRESS)
+        {
+          SET_COMPRESSED_REMOTE_ENCODING (ENC_COMPRESS, ".Z",
+                                          "Will not decompress this compress file.\n");
+        }
+#endif
+#ifdef HAVE_BROTLI
+      else if (hs->local_encoding == ENC_BROTLI)
+        {
+          SET_COMPRESSED_REMOTE_ENCODING (ENC_BROTLI, ".br",
+                                          "Will not decompress this Brotli file.\n");
+        }
+#endif
+#ifdef HAVE_LIBZ
+      else if (hs->local_encoding == ENC_DEFLATE)
+        {
+          SET_COMPRESSED_REMOTE_ENCODING (ENC_DEFLATE, ".zlib",
+                                          "Will not decompress this deflate file.\n");
+        }
+#endif
+#ifdef HAVE_ZSTD
+      else if (hs->local_encoding == ENC_ZSTD)
+        {
+          SET_COMPRESSED_REMOTE_ENCODING (ENC_ZSTD, ".zst",
+                                          "Will not decompress this Zstandard file.\n");
+        }
+#endif
+#undef SET_COMPRESSED_REMOTE_ENCODING
+    }
+
+  hs->warc_payload_decoding = hs->remote_encoding;
+  if (hs->warc_payload_decoding == ENC_NONE)
+    {
+      switch (hs->local_encoding)
+        {
+        case ENC_NONE:
+          hs->warc_payload_decoding = ENC_NONE;
+          break;
+#ifdef HAVE_NCOMPRESS
+        case ENC_COMPRESS:
+          hs->warc_payload_decoding = hs->local_encoding;
+          break;
+#endif
+        case ENC_GZIP:
+          hs->warc_payload_decoding = hs->local_encoding;
+          break;
+#ifdef HAVE_LIBZ
+        case ENC_DEFLATE:
+          hs->warc_payload_decoding = hs->local_encoding;
+          break;
+#endif
+#ifdef HAVE_BROTLI
+        case ENC_BROTLI:
+          hs->warc_payload_decoding = hs->local_encoding;
+          break;
+#endif
+#ifdef HAVE_ZSTD
+        case ENC_ZSTD:
+          hs->warc_payload_decoding = hs->local_encoding;
+          break;
+#endif
+        default:
+          hs->warc_payload_decoding = ENC_INVALID;
+          break;
+        }
     }
 
   if (!opt.server_response)
@@ -4146,6 +4349,9 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
         case ENC_GZIP:
           encoding_ext = ".gz";
           break;
+        case ENC_ZSTD:
+          encoding_ext = ".zst";
+          break;
         default:
           DEBUGP (("No extension found for encoding %d\n",
                    hs->local_encoding));
@@ -4239,8 +4445,12 @@ gethttp (const struct url *u, struct url *original_url, struct http_stat *hs,
     }
   if (contlen == -1)
     hs->contlen = -1;
-  /* If the response is gzipped, the uncompressed size is unknown. */
-  else if (hs->remote_encoding == ENC_GZIP)
+  /* If the response is compressed, the uncompressed size is unknown. */
+  else if (hs->remote_encoding == ENC_GZIP
+           || hs->remote_encoding == ENC_COMPRESS
+           || hs->remote_encoding == ENC_DEFLATE
+           || hs->remote_encoding == ENC_BROTLI
+           || hs->remote_encoding == ENC_ZSTD)
     hs->contlen = -1;
   else
     hs->contlen = contlen + contrange;
@@ -5562,13 +5772,13 @@ save_cookies (void)
     cookie_jar_save (wget_cookie_jar, opt.cookies_output);
 }
 
-#if defined DEBUG_MALLOC || defined TESTING
 void
 http_cleanup (void)
 {
   if (pconn_active)
     invalidate_persistent ();
 
+#if defined DEBUG_MALLOC || defined TESTING
   if (wget_cookie_jar)
     {
       cookie_jar_delete (wget_cookie_jar);
@@ -5585,8 +5795,8 @@ http_cleanup (void)
       hash_table_destroy (basic_authed_hosts);
       basic_authed_hosts = NULL;
     }
-}
 #endif
+}
 
 void
 ensure_extension (struct http_stat *hs, const char *ext, int *dt)
