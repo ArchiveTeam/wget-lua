@@ -24,10 +24,11 @@ RUN set -eux \
       cp -a /usr/include/nspr/. /usr/local/include/nspr/; \
       rm -f ../dist/Release/lib/*.TOC; \
       cp -a ../dist/Release/lib/* /usr/local/lib/; \
-      cp -a /usr/lib/x86_64-linux-gnu/nss/libnsspem.so* /usr/local/lib/; \
-      cp -a /lib/x86_64-linux-gnu/libnspr4.so* /usr/local/lib/; \
-      cp -a /lib/x86_64-linux-gnu/libplc4.so* /usr/local/lib/; \
-      cp -a /lib/x86_64-linux-gnu/libplds4.so* /usr/local/lib/; \
+      MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH); \
+      cp -a /usr/lib/${MULTIARCH}/nss/libnsspem.so* /usr/local/lib/; \
+      cp -a /usr/lib/${MULTIARCH}/libnspr4.so* /usr/local/lib/; \
+      cp -a /usr/lib/${MULTIARCH}/libplc4.so* /usr/local/lib/; \
+      cp -a /usr/lib/${MULTIARCH}/libplds4.so* /usr/local/lib/; \
     fi
 RUN cd /tmp \
  && wget https://github.com/vapier/ncompress/archive/c576364d691df490ec1841d028c7bece2b523c58.tar.gz -O ncompress.tar.gz \
